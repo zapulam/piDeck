@@ -1,0 +1,14 @@
+[Unit]
+Description=piDeck server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/piDeck
+ExecStart=/home/pi/piDeck/.venv/bin/python -m pideck
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
