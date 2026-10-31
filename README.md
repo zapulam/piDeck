@@ -16,8 +16,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/agents.png" width="220"> <img src="docs/playing.png" width="220"> <img src="docs/landscape.png" width="400"><br>
-  <sub>screenshots use <code>--mock</code> data</sub>
+  <img src="docs/landscape-agents.png" width="720" alt="Agents page"><br>
+  <img src="docs/landscape-playing.png" width="355" alt="Now playing page"> <img src="docs/landscape-slack.png" width="355" alt="Slack page"><br>
+  <sub>screenshots use <code>--mock</code> data and placeholder album art</sub>
 </p>
 
 ## How it works

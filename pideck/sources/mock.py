@@ -13,9 +13,9 @@ from .agents import AgentEvent, AgentRegistry
 from .slack import SlackFeed
 
 TRACKS = [
-    ("Midnight City", "M83", "Hurry Up, We're Dreaming", 243_000, "#ff6b6b", "#4d3a8e"),
-    ("Redbone", "Childish Gambino", "Awaken, My Love!", 326_000, "#f4a259", "#5b3a29"),
-    ("Genesis", "Grimes", "Visions", 255_000, "#7bdff2", "#b2f7ef"),
+    ("Silver Lining", "Mt. Joy", "Mt. Joy", 213_000, "#f4a259", "#5b3a29"),
+    ("Strangers", "Mt. Joy", "Mt. Joy", 232_000, "#7bdff2", "#2b4c7e"),
+    ("Sheep", "Mt. Joy", "Rearrange Us", 207_000, "#ff6b6b", "#4d3a8e"),
 ]
 AGENT_NAMES = [
     "piDeck", "api-gateway", "etl-nightly", "churn-model", "mcp-server",
