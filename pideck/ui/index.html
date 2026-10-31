@@ -7,15 +7,19 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="stage">
 <div id="bgart"></div>
 <main id="track" aria-live="polite"></main>
 <nav id="pager"></nav>
 <div id="conn" title="connection"></div>
 <div id="alert" hidden>
   <canvas id="alert-sprite" width="12" height="12"></canvas>
-  <div id="alert-title"></div>
-  <div id="alert-body"></div>
+  <div id="alert-text">
+    <div id="alert-title"></div>
+    <div id="alert-body"></div>
+  </div>
   <div id="alert-hint">tap to dismiss</div>
+</div>
 </div>
 <script src="creature.js"></script>
 <script src="app.js"></script>

@@ -6,6 +6,11 @@ server:
 # Order of the swipeable pages. Remove one to hide it.
 views: [agents, now_playing, slack]
 
+ui:
+  # Layout adapts to portrait and landscape on its own. If your screen is physically mounted the
+  # other way and you'd rather not rotate it in the OS, rotate the UI here: 0, 90, 180 or 270.
+  rotate: 0
+
 # Run with fake data (no accounts needed). Same as `python -m pideck --mock`.
 mock: false
 

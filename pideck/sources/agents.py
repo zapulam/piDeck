@@ -21,10 +21,12 @@ EVENT_STATE: dict[str, Optional[str]] = {
     "PreToolUse": "working",
     "PostToolUse": "working",
     "Notification": "waiting",
+    "PermissionRequest": "waiting",   # Codex-style approval prompt, if/when the CLI emits it
     "Stop": "done",
     "SessionEnd": None,
 }
 VALID_STATES = {"idle", "working", "waiting", "done", "error"}
+KINDS = {"claude", "codex"}
 
 
 class AgentEvent(BaseModel):
@@ -33,6 +35,7 @@ class AgentEvent(BaseModel):
     state: Optional[str] = None      # explicit override (idle/working/waiting/done/error)
     name: Optional[str] = None       # tile label; defaults to the cwd folder name
     cwd: Optional[str] = None
+    agent: Optional[str] = None      # which tool: claude (default) or codex
     context_pct: Optional[float] = None
     message: Optional[str] = None
 
@@ -63,11 +66,13 @@ class AgentRegistry:
             return None
 
         cur = self.agents.get(ev.session_id)
+        kind = ev.agent if ev.agent in KINDS else (cur or {}).get("agent", "claude")
         prev_state = cur["state"] if cur else None
         name = ev.name or (cur or {}).get("name") or _name_from_cwd(ev.cwd) or ev.session_id[:8]
         agent = {
             "id": ev.session_id,
             "name": name,
+            "agent": kind,
             "cwd": ev.cwd or (cur or {}).get("cwd"),
             "state": new_state,
             "context_pct": ev.context_pct
@@ -85,7 +90,7 @@ class AgentRegistry:
                 return agent  # a fresh session settling isn't news
             title = f"{name} finished" if new_state == "done" else f"{name} needs you"
             await self.hub.alert(
-                "agent", title, agent["message"] or "", state=new_state, seconds=self.alert_seconds
+                "agent", title, agent["message"] or "", state=new_state, agent=kind, seconds=self.alert_seconds
             )
         return agent
 

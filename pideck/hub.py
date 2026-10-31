@@ -47,7 +47,7 @@ class Hub:
         await self._broadcast({"type": "state", "key": key, "value": value})
 
     async def alert(
-        self, kind: str, title: str, body: str = "", *, state: str = "", seconds: float = 8
+        self, kind: str, title: str, body: str = "", *, state: str = "", agent: str = "", seconds: float = 8
     ) -> None:
         """Transient takeover. `kind` is 'agent' or 'slack'; `state` styles agent alerts."""
         await self._broadcast(
@@ -59,6 +59,7 @@ class Hub:
                     "title": title,
                     "body": body,
                     "state": state,
+                    "agent": agent,
                     "seconds": seconds,
                     "at": time.time(),
                 },
