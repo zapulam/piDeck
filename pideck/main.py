@@ -68,7 +68,7 @@ def create_app(config_path: str | None = None, mock: Optional[bool] = None, live
 
     @app.get("/api/config")
     async def config():
-        return {"views": cfg["views"], "alert_seconds": secs, "mock": cfg["mock"]}
+        return {"views": cfg["views"], "alert_seconds": secs, "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"]}
 
     @app.post("/api/agents/event", dependencies=[Depends(require_token)])
     async def agent_event(ev: AgentEvent):

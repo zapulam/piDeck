@@ -92,3 +92,40 @@ def test_hook_never_fails_when_server_down():
     r = subprocess.run([sys.executable, str(ROOT / "hooks/pideck_hook.py")], input="not json", text=True,
                        capture_output=True)
     assert r.returncode == 0
+
+
+def _hook():
+    sys.path.insert(0, str(ROOT / "hooks"))
+    import pideck_hook
+    return pideck_hook
+
+
+def test_hook_source_flag_and_codex_payload():
+    h = _hook()
+    assert h.parse_args([]) == ("claude", None)
+    assert h.parse_args(["--source", "codex"]) == ("codex", None)
+    ev = h.build_event(
+        {"session_id": "t1", "hook_event_name": "Stop", "cwd": "/w/p", "transcript_path": "/nope",
+         "last_assistant_message": "Done.\n\nTests   pass."}, {}, "codex")
+    assert ev["agent"] == "codex" and ev["event"] == "Stop"
+    assert ev["message"] == "Done. Tests pass."   # whitespace collapsed
+    assert "context_pct" not in ev                # ctx% is Claude-only
+
+
+def test_hook_codex_notify_mode():
+    h = _hook()
+    payload = json.dumps({"type": "agent-turn-complete", "thread-id": "th1", "turn-id": "9",
+                          "cwd": "/w/proj", "last-assistant-message": "Renamed foo."})
+    source, notify = h.parse_args([payload])          # Codex passes the JSON as the last argument
+    assert source == "codex" and notify == payload
+    ev = h.build_notify_event(json.loads(payload), {})
+    assert (ev["session_id"], ev["event"], ev["agent"], ev["message"]) == ("th1", "Stop", "codex", "Renamed foo.")
+    assert h.build_notify_event({"type": "something-new"}, {}) is None
+
+
+def test_hook_prints_nothing(tmp_path):
+    # Codex treats stray stdout from a Stop hook as a failure
+    r = subprocess.run([sys.executable, str(ROOT / "hooks/pideck_hook.py"), "--source", "codex"],
+                       input='{"session_id":"s","hook_event_name":"Stop"}', text=True,
+                       env={"PIDECK_URL": "http://127.0.0.1:1", "PATH": ""}, capture_output=True)
+    assert r.returncode == 0 and r.stdout == ""

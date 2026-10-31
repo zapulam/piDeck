@@ -32,8 +32,23 @@ function buildShell() {
     b.onclick = () => sec.scrollIntoView({ behavior: "smooth", inline: "start" });
     pager.appendChild(b);
   });
-  track.addEventListener("scroll", () => requestAnimationFrame(markPager), { passive: true });
+  track.addEventListener("scroll", () => { requestAnimationFrame(markPager); settleSoon(); }, { passive: true });
+  track.addEventListener("touchstart", () => { touching = true; }, { passive: true });
+  const release = () => { touching = false; settleSoon(); };
+  track.addEventListener("touchend", release, { passive: true });
+  track.addEventListener("touchcancel", release, { passive: true });
   markPager();
+}
+// CSS scroll-snap normally lands on a page; this is the safety net for when it doesn't (seen with
+// software-rotated screens): once scrolling stops and no finger is down, glide to the nearest page.
+let touching = false, settleTimer = null;
+function settleSoon() {
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    const t = $("#track"); if (touching || !t.clientWidth) return;
+    const i = Math.round(t.scrollLeft / t.clientWidth), target = i * t.clientWidth;
+    if (Math.abs(t.scrollLeft - target) > 2) t.scrollTo({ left: target, behavior: "smooth" });
+  }, 160);
 }
 function markPager() {
   const track = $("#track");
@@ -61,10 +76,10 @@ function renderAgents(sec) {
     html += `<div class="grid">` + list.map((a) => {
       const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
       const status = a.state === "working" ? "working" : a.state === "waiting" ? "needs you" : a.state;
-      return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-name="${esc(a.name)}" style="--ctx:${ctx ?? 0}%">
+      return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" style="--ctx:${ctx ?? 0}%">
         <canvas width="12" height="12"></canvas>
         <div class="name">${esc(a.name)}</div>
-        <div class="meta"><b>${status}</b>${ctx != null ? " · " + ctx + "% ctx" : ""}</div>
+        <div class="meta"><b>${status}</b>${ctx != null ? " · " + ctx + "% ctx" : a.agent === "codex" ? " · codex" : ""}</div>
         <div class="meta" data-ago="${a.state_since}">${ago(a.state_since)}</div>
       </div>`;
     }).join("") + `</div>`;
@@ -74,7 +89,7 @@ function renderAgents(sec) {
 }
 function animateTiles() {
   document.querySelectorAll(".tile").forEach((t) =>
-    drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, frame }));
+    drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, kind: t.dataset.kind, frame }));
 }
 
 let npDom = null;
@@ -87,6 +102,7 @@ function renderNow(sec) {
   }
   sec.innerHTML = `<div class="np">
     <div class="art" style="background-image:url('${esc(sp.art || "")}')"></div>
+    <div class="info">
     <div class="title">${esc(sp.title)}</div>
     <div class="artist">${esc(sp.artist)}</div>
     <div class="bar"><div class="track"><div class="fill" id="fill"></div></div>
@@ -95,7 +111,7 @@ function renderNow(sec) {
       <button data-act="previous" aria-label="previous">⏮</button>
       <button class="big" data-act="${sp.is_playing ? "pause" : "play"}" aria-label="play/pause">${sp.is_playing ? "⏸" : "▶"}</button>
       <button data-act="next" aria-label="next">⏭</button>
-    </div></div>`;
+    </div></div></div>`;
   npDom = { fill: $("#fill", sec), now: $("#t-now", sec) };
   setBg(sp.art); tickProgress();
 }
@@ -150,7 +166,7 @@ function showAlert(a) {
   clearInterval(alertFrame);
   if (a.kind === "agent") {
     let f = 0; const name = a.title.replace(/ (finished|needs you)$/, "");
-    const draw = () => drawCreature(cv, { state: a.state, name, frame: f++ });
+    const draw = () => drawCreature(cv, { state: a.state, name, kind: a.agent || "claude", frame: f++ });
     draw(); alertFrame = setInterval(draw, 450);
   } else envelope(cv);
   el.hidden = false;
@@ -203,8 +219,17 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") hideAlert();
 });
 
+// Rotate the whole UI in software (0/90/180/270). Prefer rotating the display in the OS; this is the
+// fallback. Set `ui.rotate` in config.yaml, or try it live with ?rotate=90 in the URL.
+function applyRotate() {
+  const q = new URLSearchParams(location.search).get("rotate");
+  const deg = [0, 90, 180, 270].includes(+q) && q !== null ? +q : +S.cfg.rotate || 0;
+  $("#stage").dataset.rot = deg;
+}
+
 (async function boot() {
   try { Object.assign(S.cfg, await (await fetch("/api/config")).json()); } catch {}
+  applyRotate();
   buildShell();
   renderAll();
   connect();

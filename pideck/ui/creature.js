@@ -39,7 +39,8 @@ function shade(hex, amt) {
 }
 
 // frame: integer tick (animations key off it). Draws one critter into `canvas`.
-function drawCreature(canvas, { state, name, frame }) {
+// kind: "claude" (antennae) or "codex" (round ears + forehead gem)
+function drawCreature(canvas, { state, name, frame, kind = "claude" }) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, 12, 12);
   const body = STATE_COLOR[state] || STATE_COLOR.idle;
@@ -50,13 +51,17 @@ function drawCreature(canvas, { state, name, frame }) {
   const bob = state === "working" && frame % 2 ? 1 : 0;   // working: bounce
   const px = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(x, y + bob, 1, 1); };
 
-  SPRITE.body.forEach((row, y) => {
+  const rows = SPRITE.body.slice();
+  if (kind === "codex") { rows[2] = ".BB......BB."; rows[3] = ".BBB....BBB."; }
+  rows.forEach((row, y) => {
     [...row].forEach((ch, x) => {
       if (ch === "B") px(x, y, bodyC);
       else if (ch === "A") px(x, y, bulb);
       else if (ch === "a") px(x, y, dark);
     });
   });
+
+  if (kind === "codex") { px(5, 4, bulb); px(6, 4, bulb); }
 
   // eyes
   const blink = state === "idle" && frame % 8 === 7;
