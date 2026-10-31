@@ -39,9 +39,21 @@ pip install -r requirements.txt
 python -m pideck --mock          # open http://localhost:8765  (use arrow keys or swipe)
 ```
 
-## Setup
+## Integrations
 
-Copy `.env.example` to `.env` and `config.yaml` is already there; set `mock: false`.
+What piDeck can show today:
+
+| Integration | What it shows | Status | How it connects |
+|---|---|---|---|
+| **Claude Code** | One tile per session: working, needs you, done, idle, plus a context-used bar and full-screen alerts | Supported | Claude Code hooks post to the server |
+| **Codex CLI** | The same tiles with their own creature; no context bar | Supported | Codex hooks, or the older `notify` setting (done-only) |
+| **Spotify** | Now playing with album art, progress, and play/pause/next/previous | Supported (controls need Premium) | Spotify Web API, polled |
+| **Slack** | DMs and @mentions to your bot, plus any channels you pick, with alerts | Supported | Socket Mode (no public URL needed) |
+| **ChatGPT** (web and phone apps) | n/a | Not possible | No hooks or API report what it is doing |
+
+Each one can be switched off under `modules:` in `config.yaml`, and the pages you see are listed under `views:`. Spotify, Slack and Codex are covered by automated tests with simulated data; they haven't been run against live accounts yet, so expect to tune a little on first use. Want another source? A new integration is one module in `pideck/sources/` plus one page renderer in `pideck/ui/app.js`.
+
+To get started, copy `.env.example` to `.env`, set `mock: false` in `config.yaml`, then follow the section for each integration:
 
 ### Claude Code agents
 1. Optional but recommended: set `PIDECK_TOKEN` in `.env` (any random string).
