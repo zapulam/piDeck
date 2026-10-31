@@ -14,10 +14,17 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-  font-family: var(--font); overflow: hidden; user-select: none; touch-action: pan-x; }
+  font-family: var(--font); overflow: hidden; user-select: none; touch-action: pan-x pan-y; }
+
+/* Everything lives in #stage: a size container, so layout follows the stage's own orientation.
+   That is what lets one UI serve portrait, landscape, and software-rotated screens. */
+#stage { position: fixed; inset: 0; container: stage / size; overflow: hidden; }
+#stage[data-rot="90"]  { inset: auto; top: 0; left: 0; width: 100vh; height: 100vw; transform-origin: 0 0; transform: translateX(100vw) rotate(90deg); }
+#stage[data-rot="270"] { inset: auto; top: 0; left: 0; width: 100vh; height: 100vw; transform-origin: 0 0; transform: translateY(100vh) rotate(-90deg); }
+#stage[data-rot="180"] { transform: rotate(180deg); }
 
 /* blurred album-art wash behind everything */
-#bgart { position: fixed; inset: -40px; background-size: cover; background-position: center;
+#bgart { position: absolute; inset: -40px; background-size: cover; background-position: center;
   filter: blur(50px) saturate(1.3) brightness(.45); opacity: 0; transition: opacity .8s; z-index: 0; }
 #bgart.on { opacity: 1; }
 
@@ -30,14 +37,14 @@ h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .18em; text-transform: u
   display: flex; justify-content: space-between; align-items: baseline; }
 h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 
-#pager { position: fixed; z-index: 2; left: 0; right: 0; bottom: 0; height: 44px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+#pager { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; height: 44px; display: flex; justify-content: center; align-items: center; gap: 10px; }
 #pager button { position: relative; background: none; border: 0; color: var(--dim); font: 600 12px var(--font); letter-spacing: .12em;
   text-transform: uppercase; padding: 10px 14px; border-radius: 999px; }
 #pager button.on { color: var(--text); background: rgba(255,255,255,.1); }
 #pager .badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--waiting);
   color: #fff; font-size: 10px; line-height: 16px; text-align: center; padding: 0 4px; }
 
-#conn { position: fixed; z-index: 3; top: 8px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--done); transition: background .3s; }
+#conn { position: absolute; z-index: 3; top: 8px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--done); transition: background .3s; }
 #conn.down { background: var(--error); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 
@@ -62,10 +69,11 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 /* ---------- now playing ---------- */
 #v-now_playing { display: flex; flex-direction: column; }
 .np { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 18px; text-align: center; }
-.np .art { width: min(78vw, 46vh, 420px); aspect-ratio: 1; border-radius: 14px; background: var(--panel-2) center/cover; box-shadow: 0 20px 50px -10px rgba(0,0,0,.7); }
+.np .art { width: min(78cqw, 46cqh, 420px); aspect-ratio: 1; border-radius: 14px; background: var(--panel-2) center/cover; box-shadow: 0 20px 50px -10px rgba(0,0,0,.7); }
 .np .title { font-size: 22px; font-weight: 700; max-width: 92%; line-height: 1.25; }
 .np .artist { font-size: 15px; color: #c3cbdc; margin-top: -10px; max-width: 92%; }
-.np .bar { width: min(78vw, 420px); }
+.np .bar { width: min(78cqw, 420px); }
+.np .info { display: flex; flex-direction: column; align-items: center; gap: 18px; width: 100%; }
 .np .track { height: 5px; background: rgba(255,255,255,.18); border-radius: 3px; overflow: hidden; }
 .np .fill { height: 100%; width: 0; background: #fff; border-radius: 3px; }
 .np .times { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-top: 6px; }
@@ -87,14 +95,41 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 .clear { background: none; border: 1px solid var(--line); color: var(--dim); font: 11px var(--font); border-radius: 999px; padding: 4px 10px; }
 
 /* ---------- alert takeover ---------- */
-#alert { position: fixed; z-index: 10; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+#alert { position: absolute; z-index: 10; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 14px; padding: 30px; text-align: center; background: rgba(8,10,15,.96); animation: pop .22s ease-out; }
 #alert[hidden] { display: none; }
 #alert.agent-waiting { background: radial-gradient(circle at 50% 40%, #4a1230, #0b0d12 70%); }
 #alert.agent-done { background: radial-gradient(circle at 50% 40%, #0e3b31, #0b0d12 70%); }
 #alert.slack { background: radial-gradient(circle at 50% 40%, #3a2a0e, #0b0d12 70%); }
 #alert canvas { width: 168px; height: 168px; image-rendering: pixelated; }
+#alert-text { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 92%; }
 #alert-title { font-size: 26px; font-weight: 800; }
 #alert-body { font-size: 17px; color: #c3cbdc; max-width: 90%; line-height: 1.4; }
 #alert-hint { position: absolute; bottom: 26px; font-size: 11px; color: var(--dim); letter-spacing: .15em; text-transform: uppercase; }
 @keyframes pop { from { transform: scale(.96); opacity: 0; } }
+
+/* ---------- landscape (and any wide stage) ---------- */
+@container stage (orientation: landscape) {
+  section { padding: 14px 28px 8px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); }
+  .np { flex-direction: row; gap: 5cqw; text-align: left; }
+  .np .art { width: min(70cqh, 40cqw); }
+  .np .info { align-items: flex-start; width: min(44cqw, 480px); }
+  .np .title, .np .artist { max-width: 100%; }
+  .np .bar { width: 100%; }
+  .ctl { justify-content: flex-start; }
+  #v-slack > * { max-width: 900px; margin-left: auto; margin-right: auto; }
+  #alert { flex-direction: row; gap: 5cqw; text-align: left; }
+  #alert-text { align-items: flex-start; max-width: 46cqw; }
+  #alert-hint { left: 0; right: 0; text-align: center; }
+}
+/* short screens (e.g. 800x480) */
+@container stage (max-height: 520px) {
+  h2 { margin-bottom: 8px; }
+  .tile { padding: 8px 6px 7px; gap: 3px; }
+  .tile canvas { width: 46px; height: 46px; }
+  .clock { font-size: 48px; }
+  .ctl button { width: 46px; height: 46px; }
+  .ctl button.big { width: 58px; height: 58px; }
+  .np .title { font-size: 19px; }
+}

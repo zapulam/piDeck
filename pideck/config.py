@@ -13,6 +13,7 @@ DEFAULTS: dict[str, Any] = {
     "server": {"host": "0.0.0.0", "port": 8765},
     "views": ["agents", "now_playing", "slack"],
     "mock": False,
+    "ui": {"rotate": 0},
     "alerts": {"seconds": 8},
     "modules": {
         "agents": {

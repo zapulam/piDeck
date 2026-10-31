@@ -13,14 +13,15 @@ from .agents import AgentEvent, AgentRegistry
 from .slack import SlackFeed
 
 TRACKS = [
-    ("Midnight City", "M83", "Hurry Up, We're Dreaming", 243_000, "#ff6b6b", "#4d3a8e"),
-    ("Redbone", "Childish Gambino", "Awaken, My Love!", 326_000, "#f4a259", "#5b3a29"),
-    ("Genesis", "Grimes", "Visions", 255_000, "#7bdff2", "#b2f7ef"),
+    ("Silver Lining", "Mt. Joy", "Mt. Joy", 213_000, "#f4a259", "#5b3a29"),
+    ("Strangers", "Mt. Joy", "Mt. Joy", 232_000, "#7bdff2", "#2b4c7e"),
+    ("Sheep", "Mt. Joy", "Rearrange Us", 207_000, "#ff6b6b", "#4d3a8e"),
 ]
 AGENT_NAMES = [
     "piDeck", "api-gateway", "etl-nightly", "churn-model", "mcp-server",
     "dash-v2", "chat-app", "forecast", "docs-site", "infra-tf", "slack-bot", "scratch",
 ]
+CODEX = {"docs-site", "infra-tf", "scratch", "forecast"}
 SLACK = [
     ("dm", "Maya", "DM", "got a sec? the churn model numbers look off for Q3"),
     ("mention", "Devon", "#data-team", "@zack can you review the PR for the feature store?"),
@@ -50,7 +51,8 @@ async def seed(hub: Hub, agents: AgentRegistry, slack: SlackFeed) -> None:
               "done", "done", "idle", "done"]
     for i, (name, st) in enumerate(zip(AGENT_NAMES, states)):
         await agents.handle(AgentEvent(session_id=f"mock-{i}", state=st, name=name,
-                                       context_pct=random.Random(i).randint(8, 92)))
+                                       agent="codex" if name in CODEX else "claude",
+                                       context_pct=None if name in CODEX else random.Random(i).randint(8, 92)))
         a = agents.agents[f"mock-{i}"]
         a["state_since"] = a["updated_at"] = now - random.Random(i + 40).choice([20, 90, 400, 1500, 7200, 90000])
     await agents._publish()
@@ -79,7 +81,8 @@ async def run(hub: Hub, agents: AgentRegistry, slack: SlackFeed, lively: bool = 
             nxt = {"idle": "working", "working": rng.choice(["done", "waiting"]),
                    "waiting": "working", "done": "working"}[cur]
             await agents.handle(AgentEvent(session_id=sid, state=nxt, name=AGENT_NAMES[i],
-                                           context_pct=rng.randint(8, 95)))
+                                           agent="codex" if AGENT_NAMES[i] in CODEX else "claude",
+                                           context_pct=None if AGENT_NAMES[i] in CODEX else rng.randint(8, 95)))
         elif roll < 0.8:
             kind, user, chan, text = rng.choice(SLACK)
             await slack.push(kind=kind, user=user, channel=chan, text=text)

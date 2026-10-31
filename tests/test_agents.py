@@ -73,3 +73,32 @@ def test_new_client_gets_snapshot(client):
     with client.websocket_connect("/ws") as ws:
         snap = ws.receive_json()
         assert snap["state"]["agents"][0]["name"] == "b"
+
+
+def test_codex_kind_sticks_and_alerts_carry_it(client):
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        post(client, session_id="c1", event="UserPromptSubmit", agent="codex", cwd="/w/site")
+        a = ws.receive_json()["value"][0]
+        assert (a["agent"], a["state"], a["context_pct"]) == ("codex", "working", None)
+        post(client, session_id="c1", event="PostToolUse")          # later events needn't repeat it
+        assert ws.receive_json()["value"][0]["agent"] == "codex"
+        post(client, session_id="c1", event="Stop", message="all done")
+        assert ws.receive_json()["value"][0]["state"] == "done"
+        alert = ws.receive_json()["alert"]
+        assert (alert["agent"], alert["title"], alert["body"]) == ("codex", "site finished", "all done")
+
+
+def test_unknown_agent_kind_falls_back_to_claude(client):
+    r = post(client, session_id="u", event="UserPromptSubmit", agent="gpt-99")
+    assert r.json()["agent"]["agent"] == "claude"
+
+
+def test_permission_request_means_waiting(client):
+    post(client, session_id="p", event="UserPromptSubmit")
+    r = post(client, session_id="p", event="PermissionRequest", message="Run npm test?")
+    assert r.json()["agent"]["state"] == "waiting"
+
+
+def test_config_exposes_rotate(client):
+    assert client.get("/api/config").json()["rotate"] == 0

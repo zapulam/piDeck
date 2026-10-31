@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "SessionStart":     [{ "hooks": [{ "type": "command", "command": "python3 /path/to/piDeck/hooks/pideck_hook.py --source codex", "timeout": 5 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "python3 /path/to/piDeck/hooks/pideck_hook.py --source codex", "timeout": 5 }] }],
+    "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "python3 /path/to/piDeck/hooks/pideck_hook.py --source codex", "timeout": 5 }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "python3 /path/to/piDeck/hooks/pideck_hook.py --source codex", "timeout": 5 }] }]
+  }
+}

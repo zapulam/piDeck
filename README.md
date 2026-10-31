@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" alt="piDeck" width="420">
 </h1>
 
-<p align="center"><b>A Raspberry Pi desk display:</b> Claude Code agent status, Spotify now-playing, and Slack notifications in one app. Swipe between pages; important events take over the whole screen.</p>
+<p align="center"><b>A Raspberry Pi desk display:</b> Claude Code and Codex agent status, Spotify now-playing, and Slack notifications in one app. Swipe between pages; important events take over the whole screen.</p>
 
 <p align="center">
   <a href="https://github.com/zapulam/piDeck/actions/workflows/ci.yml"><img src="https://github.com/zapulam/piDeck/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -11,18 +11,20 @@
   <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/Raspberry%20Pi-C51A4A?logo=raspberrypi&logoColor=white" alt="Raspberry Pi">
   <img src="https://img.shields.io/badge/Claude%20Code-hooks-D97757" alt="Claude Code hooks">
+  <img src="https://img.shields.io/badge/Codex%20CLI-hooks-111111" alt="Codex CLI hooks">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome">
 </p>
 
 <p align="center">
-  <img src="docs/agents.png" width="260"> <img src="docs/playing.png" width="260"><br>
-  <sub>screenshots use <code>--mock</code> data</sub>
+  <img src="docs/landscape-agents.png" width="720" alt="Agents page"><br>
+  <img src="docs/landscape-playing.png" width="355" alt="Now playing page"> <img src="docs/landscape-slack.png" width="355" alt="Slack page"><br>
+  <sub>screenshots use <code>--mock</code> data and placeholder album art</sub>
 </p>
 
 ## How it works
 
 ```
-Claude Code hooks ──POST──┐
+Claude Code / Codex hooks ──POST──┐
 Spotify Web API ──poll────┼─▶ pideck server (FastAPI) ──websocket──▶ browser UI (kiosk on the Pi)
 Slack Socket Mode ──push──┘        hub = state + alerts
 ```
@@ -41,12 +43,28 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 Copy `.env.example` to `.env` and `config.yaml` is already there; set `mock: false`.
 
-### Claude agents
+### Claude Code agents
 1. Optional but recommended: set `PIDECK_TOKEN` in `.env` (any random string).
 2. On each machine that runs Claude Code, merge `hooks/settings.example.json` into `~/.claude/settings.json` (fix the script path), and export `PIDECK_URL` (e.g. `http://pideck.local:8765`) and `PIDECK_TOKEN`.
 3. Each session becomes a tile: **working** (orange, bouncing), **needs you** (pink, pulses + full-screen alert), **done** (teal, sleeping + alert), **idle**. The bar along the bottom is context used.
 
 Notes: the tile name is the project folder (override with `PIDECK_NAME`). Context % is estimated from the session transcript's latest token usage against `PIDECK_CONTEXT_WINDOW` (default 200000; set 1000000 for 1M-context models). It's an estimate, not an official number. Drop `PostToolUse` from the hooks if you don't want a process spawned per tool call; the only downside is a tile staying "needs you" until the next prompt or stop.
+
+### Codex agents (OpenAI Codex CLI)
+
+Codex has lifecycle hooks with the same shape as Claude Code's, so the same script works; just tell it the source with `--source codex`. Codex tiles get their own creature (round ears and a forehead gem).
+
+1. Merge `hooks/codex-hooks.example.json` into `~/.codex/hooks.json` (fix the script path), and export `PIDECK_URL` / `PIDECK_TOKEN` where you run Codex.
+2. Codex hooks may be behind a feature flag on your version. If nothing shows up, add this to `~/.codex/config.toml`:
+   ```toml
+   [features]
+   codex_hooks = true
+   ```
+3. No hooks? The older `notify` setting also works: `notify = ["python3", "/path/to/piDeck/hooks/pideck_hook.py"]` in `~/.codex/config.toml`. It only reports "turn finished", so you get done tiles and alerts but no working or needs-you states.
+
+Differences from Claude Code: Codex has no session-end event, so a finished tile stays until it goes stale (`stale_hours`) or you clear it; there is no context-% bar, because Codex transcripts have a different format; and the needs-you state only appears if your Codex version emits a `PermissionRequest` hook event. This is based on Codex's public docs and write-ups, not on a live Codex session, so check it against your version.
+
+**ChatGPT** (the web and phone apps) can't be supported: it has no hooks or API that report what it is doing. Codex is the OpenAI side that can.
 
 ### Spotify
 1. Create an app at <https://developer.spotify.com/dashboard>, add redirect URI `http://127.0.0.1:8888/callback`.
@@ -71,7 +89,13 @@ sudo cp deploy/pideck.service /etc/systemd/system/ && sudo systemctl enable --no
 ```
 Then start `deploy/kiosk.sh` from your desktop session's autostart (on Raspberry Pi OS with labwc: add `/home/pi/piDeck/deploy/kiosk.sh` to `~/.config/labwc/autostart`). Edit `User=`/paths in the service file if yours differ.
 
-Screens: layout is responsive (portrait 720×1280 and square both look right). Pages are listed in `views:` in `config.yaml`.
+### Portrait, landscape, or rotated
+
+The layout follows the screen's shape on its own: portrait (720×1280), landscape (1280×720, 800×480), and square all work. The Raspberry Pi Touch Display 2 is natively portrait, so to use it sideways either:
+- **rotate it in the OS** (recommended): Screen Configuration on Raspberry Pi OS, or `wlr-randr --output DSI-1 --transform 90`; the touch input rotates with it, or
+- **rotate it in piDeck**: set `ui.rotate: 90` (or 180 / 270) in `config.yaml`. You can try it live with `http://localhost:8765/?rotate=90`.
+
+Pages are listed in `views:` in `config.yaml`.
 
 ## Development
 
