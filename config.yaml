@@ -1,0 +1,28 @@
+# piDeck configuration. Secrets live in .env, not here.
+server:
+  host: 0.0.0.0
+  port: 8765
+
+# Order of the swipeable pages. Remove one to hide it.
+views: [agents, now_playing, slack]
+
+# Run with fake data (no accounts needed). Same as `python -m pideck --mock`.
+mock: false
+
+alerts:
+  seconds: 8            # how long the full-screen takeover stays up
+
+modules:
+  agents:
+    enabled: true
+    alert_on: [done, waiting]   # done = agent finished, waiting = needs your input
+    stale_hours: 12             # drop tiles that haven't reported in this long
+    context_window: 200000      # tokens, used by the hook to compute ctx %
+  spotify:
+    enabled: true
+    poll_seconds: 3
+  slack:
+    enabled: true
+    alert_on: [dm, mention]     # dm, mention, channel
+    channels: []                # extra channel IDs to watch (needs the message.channels event)
+    keep: 30                    # messages kept in the feed

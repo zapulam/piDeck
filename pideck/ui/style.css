@@ -1,0 +1,100 @@
+:root {
+  --bg: #0b0d12;
+  --panel: #151a24;
+  --panel-2: #1c2230;
+  --line: #262e40;
+  --text: #e8ecf5;
+  --dim: #8b96ad;
+  --working: #ff9a3c;
+  --waiting: #ff4d8d;
+  --done: #5fd3b0;
+  --idle: #7d8bab;
+  --error: #ff4040;
+  --font: ui-monospace, "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font-family: var(--font); overflow: hidden; user-select: none; touch-action: pan-x; }
+
+/* blurred album-art wash behind everything */
+#bgart { position: fixed; inset: -40px; background-size: cover; background-position: center;
+  filter: blur(50px) saturate(1.3) brightness(.45); opacity: 0; transition: opacity .8s; z-index: 0; }
+#bgart.on { opacity: 1; }
+
+#track { position: relative; z-index: 1; display: flex; height: calc(100% - 44px); overflow-x: auto;
+  scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior: contain; }
+#track::-webkit-scrollbar { display: none; }
+section { flex: 0 0 100%; scroll-snap-align: start; padding: 18px 16px 8px; overflow-y: auto; scrollbar-width: none; }
+section::-webkit-scrollbar { display: none; }
+h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); font-weight: 600;
+  display: flex; justify-content: space-between; align-items: baseline; }
+h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
+
+#pager { position: fixed; z-index: 2; left: 0; right: 0; bottom: 0; height: 44px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+#pager button { position: relative; background: none; border: 0; color: var(--dim); font: 600 12px var(--font); letter-spacing: .12em;
+  text-transform: uppercase; padding: 10px 14px; border-radius: 999px; }
+#pager button.on { color: var(--text); background: rgba(255,255,255,.1); }
+#pager .badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--waiting);
+  color: #fff; font-size: 10px; line-height: 16px; text-align: center; padding: 0 4px; }
+
+#conn { position: fixed; z-index: 3; top: 8px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--done); transition: background .3s; }
+#conn.down { background: var(--error); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+/* ---------- agents ---------- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+.tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
+.tile::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--ctx, 0%); background: var(--c); opacity: .9; }
+.tile canvas { width: 60px; height: 60px; image-rendering: pixelated; }
+.tile .name { font-size: 13px; font-weight: 700; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .meta { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.tile .meta b { color: var(--c); font-weight: 600; }
+.tile[data-state=working] { --c: var(--working); border-color: color-mix(in srgb, var(--working) 55%, transparent); }
+.tile[data-state=waiting] { --c: var(--waiting); border-color: var(--waiting); animation: glow 1.4s ease-in-out infinite; }
+.tile[data-state=done]    { --c: var(--done); }
+.tile[data-state=idle]    { --c: var(--idle); opacity: .75; }
+.tile[data-state=error]   { --c: var(--error); border-color: var(--error); }
+@keyframes glow { 50% { box-shadow: 0 0 18px -2px var(--waiting); } }
+.empty { color: var(--dim); text-align: center; padding: 60px 20px; line-height: 1.7; font-size: 13px; }
+.empty code { color: var(--text); }
+
+/* ---------- now playing ---------- */
+#v-now_playing { display: flex; flex-direction: column; }
+.np { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 18px; text-align: center; }
+.np .art { width: min(78vw, 46vh, 420px); aspect-ratio: 1; border-radius: 14px; background: var(--panel-2) center/cover; box-shadow: 0 20px 50px -10px rgba(0,0,0,.7); }
+.np .title { font-size: 22px; font-weight: 700; max-width: 92%; line-height: 1.25; }
+.np .artist { font-size: 15px; color: #c3cbdc; margin-top: -10px; max-width: 92%; }
+.np .bar { width: min(78vw, 420px); }
+.np .track { height: 5px; background: rgba(255,255,255,.18); border-radius: 3px; overflow: hidden; }
+.np .fill { height: 100%; width: 0; background: #fff; border-radius: 3px; }
+.np .times { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-top: 6px; }
+.ctl { display: flex; gap: 22px; align-items: center; }
+.ctl button { background: rgba(255,255,255,.1); border: 0; color: var(--text); width: 56px; height: 56px; border-radius: 50%; font-size: 20px; }
+.ctl button.big { width: 70px; height: 70px; background: #fff; color: #111; font-size: 26px; }
+.ctl button:active { transform: scale(.94); }
+.clock { font-size: 64px; font-weight: 700; letter-spacing: .02em; }
+.date { color: var(--dim); font-size: 14px; margin-top: -8px; }
+
+/* ---------- slack ---------- */
+.msg { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--idle); border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
+.msg[data-kind=dm] { border-left-color: var(--waiting); }
+.msg[data-kind=mention] { border-left-color: var(--working); }
+.msg .top { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+.msg .top b { color: var(--text); }
+.msg .text { font-size: 14px; line-height: 1.4; word-wrap: anywhere; }
+.msg.unread .top b::before { content: "● "; color: var(--waiting); }
+.clear { background: none; border: 1px solid var(--line); color: var(--dim); font: 11px var(--font); border-radius: 999px; padding: 4px 10px; }
+
+/* ---------- alert takeover ---------- */
+#alert { position: fixed; z-index: 10; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 30px; text-align: center; background: rgba(8,10,15,.96); animation: pop .22s ease-out; }
+#alert[hidden] { display: none; }
+#alert.agent-waiting { background: radial-gradient(circle at 50% 40%, #4a1230, #0b0d12 70%); }
+#alert.agent-done { background: radial-gradient(circle at 50% 40%, #0e3b31, #0b0d12 70%); }
+#alert.slack { background: radial-gradient(circle at 50% 40%, #3a2a0e, #0b0d12 70%); }
+#alert canvas { width: 168px; height: 168px; image-rendering: pixelated; }
+#alert-title { font-size: 26px; font-weight: 800; }
+#alert-body { font-size: 17px; color: #c3cbdc; max-width: 90%; line-height: 1.4; }
+#alert-hint { position: absolute; bottom: 26px; font-size: 11px; color: var(--dim); letter-spacing: .15em; text-transform: uppercase; }
+@keyframes pop { from { transform: scale(.96); opacity: 0; } }
