@@ -10,7 +10,7 @@ import asyncio
 import time
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..hub import Hub
 
@@ -27,17 +27,18 @@ EVENT_STATE: dict[str, Optional[str]] = {
 }
 VALID_STATES = {"idle", "working", "waiting", "done", "error"}
 KINDS = {"claude", "codex"}
+MAX_SESSIONS = 100   # oldest tiles are dropped beyond this
 
 
 class AgentEvent(BaseModel):
-    session_id: str
-    event: Optional[str] = None      # Claude Code hook_event_name
-    state: Optional[str] = None      # explicit override (idle/working/waiting/done/error)
-    name: Optional[str] = None       # tile label; defaults to the cwd folder name
-    cwd: Optional[str] = None
-    agent: Optional[str] = None      # which tool: claude (default) or codex
-    context_pct: Optional[float] = None
-    message: Optional[str] = None
+    session_id: str = Field(max_length=128)
+    event: Optional[str] = Field(None, max_length=64)      # Claude Code hook_event_name
+    state: Optional[str] = Field(None, max_length=16)      # explicit override (idle/working/waiting/done/error)
+    name: Optional[str] = Field(None, max_length=64)       # tile label; defaults to the cwd folder name
+    cwd: Optional[str] = Field(None, max_length=512)
+    agent: Optional[str] = Field(None, max_length=16)      # which tool: claude (default) or codex
+    context_pct: Optional[float] = Field(None, ge=0, le=100)
+    message: Optional[str] = Field(None, max_length=500)
 
 
 class AgentRegistry:
@@ -83,6 +84,8 @@ class AgentRegistry:
             "state_since": now if new_state != prev_state else (cur or {}).get("state_since", now),
         }
         self.agents[ev.session_id] = agent
+        while len(self.agents) > MAX_SESSIONS:
+            del self.agents[min(self.agents, key=lambda k: self.agents[k]["updated_at"])]
         await self._publish()
 
         if new_state != prev_state and new_state in self.cfg.get("alert_on", []):

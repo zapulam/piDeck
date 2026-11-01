@@ -121,7 +121,12 @@ def save_settings(home: Path, url: str, token: str, dry: bool) -> Path:
     f = d / "hook.json"
     if not dry:
         d.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps({"url": url, "token": token}, indent=2) + "\n")
+        try:
+            conf = json.loads(f.read_text())
+        except Exception:
+            conf = {}
+        conf.update({"url": url, "token": token})
+        f.write_text(json.dumps(conf, indent=2) + "\n")
         try:
             os.chmod(f, stat.S_IRUSR | stat.S_IWUSR)  # the token lives here: owner only
         except OSError:

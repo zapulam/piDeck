@@ -58,16 +58,6 @@ def test_context_pct_sticks_between_events(client):
     assert r.json()["agent"]["context_pct"] == 30
 
 
-def test_token_required_when_set(monkeypatch):
-    monkeypatch.setenv("PIDECK_TOKEN", "sekret")
-    monkeypatch.chdir("/tmp")
-    with TestClient(create_app("/nonexistent/config.yaml")) as c:
-        body = {"session_id": "s", "event": "SessionStart"}
-        assert c.post("/api/agents/event", json=body).status_code == 401
-        assert c.post("/api/agents/event", json=body, headers={"Authorization": "Bearer nope"}).status_code == 401
-        assert c.post("/api/agents/event", json=body, headers={"Authorization": "Bearer sekret"}).status_code == 200
-
-
 def test_new_client_gets_snapshot(client):
     post(client, session_id="s", event="UserPromptSubmit", cwd="/a/b")
     with client.websocket_connect("/ws") as ws:

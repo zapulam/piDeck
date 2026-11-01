@@ -10,5 +10,21 @@ ExecStart=/home/pi/piDeck/.venv/bin/python -m pideck
 Restart=always
 RestartSec=3
 
+# Sandboxing: the server only needs the network and its own folder (it writes .env on first run).
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/home/pi/piDeck
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target
