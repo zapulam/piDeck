@@ -55,10 +55,27 @@ Each one can be switched off under `modules:` in `config.yaml`, and the pages yo
 
 To get started, copy `.env.example` to `.env`, set `mock: false` in `config.yaml`, then follow the section for each integration:
 
+### Claude Code and Codex: one command
+
+Optional but recommended: set `PIDECK_TOKEN` in `.env` on the Pi (any random string). Then, on each computer that runs Claude Code or Codex, run:
+
+```bash
+python3 hooks/install.py --url http://YOUR-PI:8765 --token YOUR_PIDECK_TOKEN --test
+```
+
+(The server prints this exact command, with its address filled in, when it starts.) It checks the server is reachable, saves the address, adds the hooks to Claude Code and/or Codex (whichever it finds), and shows a test tile on the display. It leaves your other settings alone, keeps a backup of anything it edits, and can be re-run safely. `--dry-run` shows what it would do; `--uninstall` removes everything. Restart any open sessions afterwards.
+
+It works the same for the terminal and for desktop or editor apps, because the address is saved in a file rather than an environment variable (apps launched from a dock or Start menu don't see shell exports).
+
+<details>
+<summary>Prefer to do it by hand?</summary>
+
+Merge `hooks/settings.example.json` into `~/.claude/settings.json` (and `hooks/codex-hooks.example.json` into `~/.codex/hooks.json`), fixing the script path, and put your address in `~/.config/pideck/hook.json` as `{"url": "http://YOUR-PI:8765", "token": "..."}`, or export `PIDECK_URL` and `PIDECK_TOKEN`.
+</details>
+
 ### Claude Code agents
-1. Optional but recommended: set `PIDECK_TOKEN` in `.env` (any random string).
-2. On each machine that runs Claude Code, merge `hooks/settings.example.json` into `~/.claude/settings.json` (fix the script path), and export `PIDECK_URL` (e.g. `http://pideck.local:8765`) and `PIDECK_TOKEN`.
-3. Each session becomes a tile: **working** (orange, bouncing), **needs you** (pink, pulses + full-screen alert), **done** (teal, sleeping + alert), **idle**. The bar along the bottom is context used.
+
+Each session becomes a tile: **working** (orange, bouncing), **needs you** (pink, pulses + full-screen alert), **done** (teal, sleeping + alert), **idle**. The bar along the bottom is context used.
 
 Notes: the tile name is the project folder (override with `PIDECK_NAME`). Context % is estimated from the session transcript's latest token usage against `PIDECK_CONTEXT_WINDOW` (default 200000; set 1000000 for 1M-context models). It's an estimate, not an official number. Drop `PostToolUse` from the hooks if you don't want a process spawned per tool call; the only downside is a tile staying "needs you" until the next prompt or stop.
 
@@ -66,7 +83,7 @@ Notes: the tile name is the project folder (override with `PIDECK_NAME`). Contex
 
 Codex has lifecycle hooks with the same shape as Claude Code's, so the same script works; just tell it the source with `--source codex`. Codex tiles get their own creature (round ears and a forehead gem).
 
-1. Merge `hooks/codex-hooks.example.json` into `~/.codex/hooks.json` (fix the script path), and export `PIDECK_URL` / `PIDECK_TOKEN` where you run Codex.
+1. Run the one-command installer above (or `--codex` to force it).
 2. Codex hooks may be behind a feature flag on your version. If nothing shows up, add this to `~/.codex/config.toml`:
    ```toml
    [features]
