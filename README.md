@@ -46,7 +46,7 @@ What piDeck can show today:
 | Integration | What it shows | Status | How it connects |
 |---|---|---|---|
 | **Claude Code** | One tile per session: working, needs you, done, idle, plus a context-used bar and full-screen alerts | Supported | Claude Code hooks post to the server |
-| **Codex CLI** | The same tiles with their own creature; no context bar | Supported | Codex hooks, or the older `notify` setting (done-only) |
+| **Codex CLI** | The same tiles; no context bar | Supported | Codex hooks, or the older `notify` setting (done-only) |
 | **Spotify** | Now playing with album art, progress, and play/pause/next/previous | Supported (controls need Premium) | Spotify Web API, polled |
 | **Slack** | DMs and @mentions to your bot, plus any channels you pick, with alerts | Supported | Socket Mode (no public URL needed) |
 | **ChatGPT** (web and phone apps) | n/a | Not possible | No hooks or API report what it is doing |
@@ -75,13 +75,13 @@ Merge `hooks/settings.example.json` into `~/.claude/settings.json` (and `hooks/c
 
 ### Claude Code agents
 
-Each session becomes a tile: **working** (orange, bouncing), **needs you** (pink, pulses + full-screen alert), **done** (teal, sleeping + alert), **idle**. The bar along the bottom is context used.
+Each session becomes a tile with its own pixel fruit, picked from the project name (piDeck is always the raspberry). **Working**: a shine sweeps across it. **Needs you**: a blinking "!" and a full-screen alert. **Done**: asleep, plus an alert. **Idle**: awake, glancing around. **Error**: dull colours and a sweat drop. The bar along the bottom is context used.
 
 Notes: the tile name is the project folder (override with `PIDECK_NAME`). Context % is estimated from the session transcript's latest token usage against `PIDECK_CONTEXT_WINDOW` (default 200000; set 1000000 for 1M-context models). It's an estimate, not an official number. Drop `PostToolUse` from the hooks if you don't want a process spawned per tool call; the only downside is a tile staying "needs you" until the next prompt or stop.
 
 ### Codex agents (OpenAI Codex CLI)
 
-Codex has lifecycle hooks with the same shape as Claude Code's, so the same script works; just tell it the source with `--source codex`. Codex tiles get their own creature (round ears and a forehead gem).
+Codex has lifecycle hooks with the same shape as Claude Code's, so the same script works; just tell it the source with `--source codex`.
 
 1. Run the one-command installer above (or `--codex` to force it).
 2. Codex hooks may be behind a feature flag on your version. If nothing shows up, add this to `~/.codex/config.toml`:
