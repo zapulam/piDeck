@@ -184,8 +184,21 @@ function onState(key, value) {
   } else S[key] = value;
   renderAll();
 }
+// The kiosk on the Pi needs no token. Another device can open  http://PI:8765/?token=...  once; it is
+// remembered in that browser and removed from the address bar.
+const TOKEN = (() => {
+  let t = new URLSearchParams(location.search).get("token") || "";
+  try {
+    if (t) { localStorage.setItem("pideck_token", t); history.replaceState(null, "", location.pathname + location.hash); }
+    else t = localStorage.getItem("pideck_token") || "";
+  } catch {}
+  return t;
+})();
+const authInit = (init = {}) => TOKEN ? { ...init, headers: { Authorization: "Bearer " + TOKEN } } : init;
+
 function connect() {
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" +
+    (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
   ws.onopen = () => { $("#conn").classList.remove("down"); connect.delay = 500; };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
@@ -206,10 +219,10 @@ document.addEventListener("click", async (e) => {
   if (e.target.closest("#alert")) return hideAlert();
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act) {
-    try { const r = await fetch("/api/spotify/" + act, { method: "POST" });
+    try { const r = await fetch("/api/spotify/" + act, authInit({ method: "POST" }));
       if (r.status === 403) alert403(); } catch {}
   }
-  if (e.target.id === "clear") fetch("/api/slack/clear", { method: "POST" });
+  if (e.target.id === "clear") fetch("/api/slack/clear", authInit({ method: "POST" }));
 });
 function alert403() { showAlert({ kind: "slack", title: "Spotify Premium needed", body: "Playback controls only work on Premium accounts.", seconds: 4 }); }
 document.addEventListener("keydown", (e) => {

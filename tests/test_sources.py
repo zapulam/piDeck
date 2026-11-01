@@ -106,7 +106,7 @@ def test_hook_source_flag_and_codex_payload():
     assert h.parse_args(["--source", "codex"]) == ("codex", None)
     ev = h.build_event(
         {"session_id": "t1", "hook_event_name": "Stop", "cwd": "/w/p", "transcript_path": "/nope",
-         "last_assistant_message": "Done.\n\nTests   pass."}, {}, "codex")
+         "last_assistant_message": "Done.\n\nTests   pass."}, {"PIDECK_SEND_MESSAGES": "1"}, "codex")
     assert ev["agent"] == "codex" and ev["event"] == "Stop"
     assert ev["message"] == "Done. Tests pass."   # whitespace collapsed
     assert "context_pct" not in ev                # ctx% is Claude-only
@@ -118,7 +118,7 @@ def test_hook_codex_notify_mode():
                           "cwd": "/w/proj", "last-assistant-message": "Renamed foo."})
     source, notify = h.parse_args([payload])          # Codex passes the JSON as the last argument
     assert source == "codex" and notify == payload
-    ev = h.build_notify_event(json.loads(payload), {})
+    ev = h.build_notify_event(json.loads(payload), {"PIDECK_SEND_MESSAGES": "1"})
     assert (ev["session_id"], ev["event"], ev["agent"], ev["message"]) == ("th1", "Stop", "codex", "Renamed foo.")
     assert h.build_notify_event({"type": "something-new"}, {}) is None
 
@@ -129,3 +129,18 @@ def test_hook_prints_nothing(tmp_path):
                        input='{"session_id":"s","hook_event_name":"Stop"}', text=True,
                        env={"PIDECK_URL": "http://127.0.0.1:1", "PATH": ""}, capture_output=True)
     assert r.returncode == 0 and r.stdout == ""
+
+
+def test_assistant_reply_snippets_are_opt_in(tmp_path):
+    h = _hook()
+    payload = {"session_id": "t", "hook_event_name": "Stop", "last_assistant_message": "secret plans"}
+    no_conf = {"PIDECK_CONFIG": str(tmp_path / "none.json")}
+    assert "message" not in h.build_event(payload, no_conf, "codex")           # default: not sent
+    assert "message" not in h.build_notify_event(
+        {"type": "agent-turn-complete", "last-assistant-message": "x"}, no_conf)
+    saved = tmp_path / "hook.json"
+    saved.write_text('{"send_messages": true}')
+    assert h.build_event(payload, {"PIDECK_CONFIG": str(saved)}, "codex")["message"] == "secret plans"
+    assert "message" not in h.build_event(payload, {"PIDECK_CONFIG": str(saved), "PIDECK_SEND_MESSAGES": "0"}, "codex")
+    # Notification text is short and written by the tool itself, so it is always sent
+    assert h.build_event({"session_id": "t", "hook_event_name": "Notification", "message": "needs you"}, no_conf)["message"] == "needs you"

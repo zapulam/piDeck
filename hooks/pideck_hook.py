@@ -18,6 +18,9 @@ and registers this script. Environment variables, if set, override that file:
   PIDECK_CONFIG          path to a different hook.json
   PIDECK_NAME            tile label override (default: the project folder name)
   PIDECK_CONTEXT_WINDOW  tokens for the ctx% estimate (default 200000; Claude Code only)
+  PIDECK_SEND_MESSAGES   set to 1 to also send a 200-character snippet of the assistant's last reply
+                         (off by default: it crosses your network, and the server may be plain HTTP).
+                         Or set "send_messages": true in ~/.config/pideck/hook.json.
 """
 import json
 import os
@@ -53,6 +56,20 @@ def context_pct(transcript_path, window):
     return None
 
 
+def _saved(env):
+    path = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def wants_messages(env):
+    v = env.get("PIDECK_SEND_MESSAGES")
+    return v.lower() in ("1", "true", "yes") if v is not None else bool(_saved(env).get("send_messages"))
+
+
 def build_event(payload, env, source="claude"):
     ev = {
         "session_id": payload.get("session_id") or "unknown",
@@ -63,7 +80,7 @@ def build_event(payload, env, source="claude"):
     if env.get("PIDECK_NAME"):
         ev["name"] = env["PIDECK_NAME"]
     # Notification carries `message`; Codex's Stop carries `last_assistant_message`
-    msg = payload.get("message") or payload.get("last_assistant_message")
+    msg = payload.get("message") or (payload.get("last_assistant_message") if wants_messages(env) else None)
     if msg:
         ev["message"] = " ".join(str(msg).split())[:200]
     # ctx% is only computed for Claude Code: Codex transcripts have a different shape
@@ -86,7 +103,7 @@ def build_notify_event(payload, env):
     }
     if env.get("PIDECK_NAME"):
         ev["name"] = env["PIDECK_NAME"]
-    if payload.get("last-assistant-message"):
+    if payload.get("last-assistant-message") and wants_messages(env):
         ev["message"] = " ".join(str(payload["last-assistant-message"]).split())[:200]
     return ev
 
@@ -108,12 +125,7 @@ def parse_args(argv):
 def load_settings(env):
     """url/token: environment wins, then the file the installer wrote, then defaults.
     The file matters because apps started from a dock or Start menu don't see shell exports."""
-    path = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
-    try:
-        with open(path) as f:
-            saved = json.load(f)
-    except Exception:
-        saved = {}
+    saved = _saved(env)
     return {
         "url": env.get("PIDECK_URL") or saved.get("url") or "http://localhost:8765",
         "token": env.get("PIDECK_TOKEN") or saved.get("token") or "",
