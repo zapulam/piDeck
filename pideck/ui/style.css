@@ -60,7 +60,7 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 .tile[data-state=working] { --c: var(--working); border-color: color-mix(in srgb, var(--working) 55%, transparent); }
 .tile[data-state=waiting] { --c: var(--waiting); border-color: var(--waiting); animation: glow 1.4s ease-in-out infinite; }
 .tile[data-state=done]    { --c: var(--done); }
-.tile[data-state=idle]    { --c: var(--idle); opacity: .75; }
+.tile[data-state=idle]    { --c: var(--idle); }
 .tile[data-state=error]   { --c: var(--error); border-color: var(--error); }
 @keyframes glow { 50% { box-shadow: 0 0 18px -2px var(--waiting); } }
 .empty { color: var(--dim); text-align: center; padding: 60px 20px; line-height: 1.7; font-size: 13px; }
