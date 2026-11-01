@@ -11,9 +11,11 @@ Two ways in, same script:
   Codex `notify` (fallback if you don't use hooks): Codex passes ONE JSON string as the last
   command-line argument instead of stdin and only reports "turn finished". Detected automatically.
 
-Env:
+Easiest setup: run hooks/install.py, which saves the address in ~/.config/pideck/hook.json
+and registers this script. Environment variables, if set, override that file:
   PIDECK_URL             default http://localhost:8765   (use the Pi's address, e.g. http://pideck.local:8765)
   PIDECK_TOKEN           shared secret, if the server has one
+  PIDECK_CONFIG          path to a different hook.json
   PIDECK_NAME            tile label override (default: the project folder name)
   PIDECK_CONTEXT_WINDOW  tokens for the ctx% estimate (default 200000; Claude Code only)
 """
@@ -103,11 +105,27 @@ def parse_args(argv):
     return source, None
 
 
+def load_settings(env):
+    """url/token: environment wins, then the file the installer wrote, then defaults.
+    The file matters because apps started from a dock or Start menu don't see shell exports."""
+    path = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
+    try:
+        with open(path) as f:
+            saved = json.load(f)
+    except Exception:
+        saved = {}
+    return {
+        "url": env.get("PIDECK_URL") or saved.get("url") or "http://localhost:8765",
+        "token": env.get("PIDECK_TOKEN") or saved.get("token") or "",
+    }
+
+
 def post(ev, env):
+    conf = load_settings(env)
     headers = {"Content-Type": "application/json"}
-    if env.get("PIDECK_TOKEN"):
-        headers["Authorization"] = "Bearer " + env["PIDECK_TOKEN"]
-    url = env.get("PIDECK_URL", "http://localhost:8765").rstrip("/") + "/api/agents/event"
+    if conf["token"]:
+        headers["Authorization"] = "Bearer " + conf["token"]
+    url = conf["url"].rstrip("/") + "/api/agents/event"
     urllib.request.urlopen(urllib.request.Request(url, json.dumps(ev).encode(), headers), timeout=2).read()
 
 
