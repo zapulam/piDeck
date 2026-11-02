@@ -4,8 +4,8 @@ updates:
     directory: /
     versioning-strategy: increase-if-necessary   # don't raise minimums just because a newer release exists
     schedule:
-      interval: weekly
+      interval: monthly
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
