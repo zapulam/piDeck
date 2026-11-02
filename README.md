@@ -23,15 +23,17 @@
 
 ## How it works
 
-```
-   YOUR COMPUTER                        RASPBERRY PI                              CLOUD
-┌────────────────────┐          ┌─────────────────────────────┐
-│ Claude Code / Codex│  event   │  piDeck server (FastAPI)    │◀── poll ───  Spotify
-│  └ tiny hook script├─────────▶│   hub = state + alerts      │◀── push ───  Slack (Socket Mode)
-└────────────────────┘ HTTP+token│        │ websocket          │
-                                 │        ▼                    │
-                                 │  kiosk browser → the screen │
-                                 └─────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph PC["Your computer"]
+        A["Claude Code / Codex"] --> H["hook script"]
+    end
+    subgraph PI["Raspberry Pi"]
+        S["piDeck server<br/>(state + alerts)"] -->|websocket| K["kiosk browser<br/>(the screen)"]
+    end
+    H -->|"HTTP + token"| S
+    SP["Spotify"] -->|polled| S
+    SL["Slack"] -->|"Socket Mode"| S
 ```
 
 - **On your computer:** nothing stays running. You run one install command once; after that Claude Code or Codex starts a small hook script (Python, standard library only) on each event, and it posts the event to the Pi and exits.
