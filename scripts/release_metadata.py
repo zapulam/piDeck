@@ -60,7 +60,7 @@ def write_checksums(
     """Write a sorted checksum manifest covering every release ZIP in a directory.
 
     Args:
-        directory: Folder containing the desktop and source release archives.
+        directory: Folder containing the source release archive.
 
     Returns:
         The path to the generated SHA256SUMS manifest.

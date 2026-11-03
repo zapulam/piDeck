@@ -62,34 +62,31 @@ Each one can be switched off under `modules:` in `config.yaml`, and the pages yo
 
 ### Desktop: Windows and macOS
 
-piDeck can run in a small native window with no Raspberry Pi. Install the optional desktop dependencies and launch it from this repository:
+Clone this repository, then run the setup script for your computer (Python 3.11+ required):
 
-```bash
-python -m pip install -r requirements-desktop.txt
-python -m pideck.desktop
+**Windows** (PowerShell, from the repo root):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
+.\run-desktop.cmd
 ```
 
-The resizable window starts at 520×720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. The local server binds only to `127.0.0.1:8765`, regardless of the regular server's host setting, so hooks on the same computer can connect to `http://localhost:8765` without a token:
+**macOS:**
 
 ```bash
-python hooks/install.py --url http://localhost:8765
+bash scripts/setup-macos.sh
+./run-desktop
 ```
 
-Desktop configuration, `.env`, logs, and the persistent browser profile live under `%LOCALAPPDATA%/piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Place your `config.yaml` and optional Spotify/Slack credentials there, or pass `--config /path/to/config.yaml`. The regular Pi/server command still uses its existing configuration paths. Use `--port` to choose another local port and point the hooks at that port as well.
+Each script creates `.venv`, installs desktop dependencies, writes a `run-desktop` launcher, and installs Claude Code / Codex / Cursor hooks aimed at `http://localhost:8765` (no token needed for that local server). Pass `-NoHooks` / `--no-hooks` to skip hooks, or `--url` / `--token` when the display is a remote Pi.
+
+The resizable window starts at 520×720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. Prefer the browser instead? Run `.venv`'s `python -m pideck --mock` and open `http://localhost:8765`.
+
+Desktop configuration, `.env`, logs, and the persistent browser profile live under `%LOCALAPPDATA%/piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Place your `config.yaml` and optional Spotify/Slack credentials there, or pass `--config /path/to/config.yaml`. Use `--port` to choose another local port and point the hooks at that port as well.
 
 To view an existing Pi server instead, use `python -m pideck.desktop --url "http://YOUR-PI:8765/?token=YOUR_PIDECK_TOKEN"`. This starts only a window; the Pi continues to run the server. The token is remembered in the desktop profile. If another local server already occupies the configured port, close it or use `--url http://localhost:8765` to view it.
 
-**Double-clickable builds.** [GitHub Releases](https://github.com/zapulam/piDeck/releases) provides versioned Windows x64, Apple Silicon, and Intel Mac ZIPs. Extract the entire platform archive before opening `piDeck.exe` or the `.app` bundle; Python is not needed on the viewer's computer. PR and main-branch builds are also available as workflow artifacts. These builds are unsigned; macOS builds are not notarized. Windows uses the [WebView2 Runtime](https://pywebview.flowrl.com/guide/installation.html#windows); macOS uses WebKit.
-
-You can also build for the current operating system locally:
-
-```bash
-python -m pip install -r requirements-build.txt
-python -m scripts.build_desktop --platform windows-x64
-python -m scripts.smoke_desktop --executable-dir dist
-```
-
-For macOS, use `--platform macos-arm64` or `--platform macos-x64` on a matching Mac. Open `dist/piDeck/piDeck.exe` on Windows or `dist/piDeck.app` on macOS. The archive contains a dependency/version/commit manifest and the license. Build each platform's app on that platform. The automated packaged smoke test checks backend startup, UI assets, agent events, and shutdown without a display server; it does not verify native GUI rendering. Hook installation on agent computers still uses the separate Python hook installer above; it is not bundled into the desktop executable.
+Windows uses the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (usually already installed with Edge); macOS uses WebKit. If Windows reports that WebView2 is missing, install Microsoft's Evergreen runtime.
 
 ### 1. On the Raspberry Pi: the server and the screen
 
@@ -185,17 +182,17 @@ python -m playwright install chromium
 pytest -m browser
 ```
 
-CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The same pipeline builds and smoke-tests Windows x64, macOS arm64, and macOS x64 desktop packages; the ARM package reuses its Python 3.13 test runner. The stable required check is **CI passed**, which succeeds only after every validation and package check passes.
+CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The stable required check is **CI passed**, which succeeds only after every validation job passes.
 
 All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. AI-assisted contributions and Claude, Codex, and Cursor credit trailers are welcome. The attribution gate requires human authors and committers and rejects Dependabot and other bot credit trailers; human and AI tool credits remain allowed.
 
 ## Releases
 
-The version in `pideck/__init__.py` is the source of truth. After merging a tested version change, create a matching tag such as `v0.1.0` on `main` and push it. The **Release** workflow validates the tag/version and main-branch ancestry, reruns CI against that exact commit, builds all three desktop archives, and creates a draft GitHub Release only after every check succeeds. Pre-release tags such as `v0.2.0-rc.1` must match the version string and are marked as pre-releases.
+The version in `pideck/__init__.py` is the source of truth. After merging a tested version change, create a matching tag such as `v0.1.0` on `main` and push it. The **Release** workflow validates the tag/version and main-branch ancestry, reruns CI against that exact commit, and creates a draft GitHub Release only after every check succeeds. Pre-release tags such as `v0.2.0-rc.1` must match the version string and are marked as pre-releases.
 
-Each release includes Windows x64, Apple Silicon, and Intel Mac ZIPs, a source ZIP for the Pi/server, `SHA256SUMS`, and GitHub build-provenance attestations. You can check downloads with `sha256sum --check SHA256SUMS` and verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`. Archives preserve macOS bundle permissions. Application signing/notarization requires separate signing credentials and is not provided by build attestations.
+Each release includes a source ZIP (for cloning alternatives, Pi installs, and archival), `SHA256SUMS`, and GitHub build-provenance attestations. Desktop Windows/macOS installs use the setup scripts in this repository rather than platform binaries. You can check downloads with `sha256sum --check SHA256SUMS` and verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`.
 
-Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads all assets, and then publishes only when requested; an interrupted draft can be retried, but published releases are never overwritten. A draft build still runs the full CI and packaging pipeline.
+Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads assets, and then publishes only when requested; an interrupted draft can be retried, but published releases are never overwritten. A draft build still runs the full CI pipeline.
 
 When accepting dependency or AI-assisted updates on Zachary's behalf, keep `Zachary <84103628+zapulam@users.noreply.github.com>` as author and committer and include the assisting tool's own `Co-authored-by` trailer. Preserve human and AI tool credits in pull requests and squash commits, while removing Dependabot and other bot credits. Squash merges default to commit messages; review the merge message to retain tool credit trailers. Repository guidance documents this policy; Claude Code uses its default attribution because the project no longer overrides it. Tool credit trailers can add the credited tools to GitHub's contributor display.
 
