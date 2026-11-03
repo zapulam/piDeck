@@ -11,3 +11,4 @@ __pycache__/
 /run-desktop
 /run-desktop.cmd
 /piDeck.lnk
+ui-settings.json

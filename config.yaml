@@ -4,6 +4,7 @@ server:
   port: 8765
 
 # Order of the swipeable pages. Remove one to hide it.
+# The Settings page can hide pages too; that choice is saved in ui-settings.json, which is gitignored.
 views: [agents, now_playing, slack]
 
 ui:

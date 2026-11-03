@@ -41,6 +41,15 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     page.locator(".done-card", has_text="notes finished").wait_for()
                     page.locator(".done-card", has_text="notes finished").click()
                     page.locator(".done-card").wait_for(state="hidden")
+                    page.locator('#pager button[data-view="settings"]').click()
+                    page.locator('[data-page="slack"][aria-pressed="true"]').click()
+                    page.locator('#pager button[data-view="slack"]').wait_for(state="detached")
+                    page.reload()
+                    page.wait_for_selector('#pager button[data-view="settings"]')
+                    assert page.locator('#pager button[data-view="slack"]').count() == 0
+                    page.locator('#pager button[data-view="settings"]').click()
+                    page.locator('[data-page="slack"]').click()
+                    page.locator('#pager button[data-view="slack"]').wait_for()
                 assert page.locator("#v-agents").evaluate("el => el.scrollWidth <= el.clientWidth")
                 with httpx.Client(base_url=url, trust_env=False) as client:
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "state": "working", "agent": "cursor"})

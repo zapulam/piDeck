@@ -1,8 +1,10 @@
 // piDeck UI: one websocket, three swipeable pages, one alert overlay. No build step, no network deps.
+const PAGES = ["agents", "now_playing", "slack"];
 const VIEWS = {
   agents:      { label: "Agents",  render: renderAgents },
   now_playing: { label: "Playing", render: renderNow },
   slack:       { label: "Slack",   render: renderSlack },
+  settings:    { label: "Settings", render: renderSettings },
 };
 const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], agent_usage: {}, seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8, agents_stale_hours: 12 } };
 let frame = 0;
@@ -20,10 +22,15 @@ function ago(ts) {
 const mmss = (ms) => { const t = Math.floor(ms / 1000); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
 
 // ---------- shell ----------
+function navViews() {
+  const chosen = new Set(S.cfg.views || PAGES);
+  return PAGES.filter((id) => chosen.has(id)).concat(["settings"]);
+}
 function buildShell() {
   const track = $("#track"), pager = $("#pager");
+  const keep = currentView();
   track.innerHTML = ""; pager.innerHTML = "";
-  S.cfg.views.filter((v) => VIEWS[v]).forEach((v, i) => {
+  navViews().forEach((v) => {
     const sec = document.createElement("section");
     sec.id = "v-" + v; sec.dataset.view = v;
     track.appendChild(sec);
@@ -32,12 +39,18 @@ function buildShell() {
     b.onclick = () => sec.scrollIntoView({ behavior: "smooth", inline: "start" });
     pager.appendChild(b);
   });
-  track.addEventListener("scroll", () => { requestAnimationFrame(markPager); settleSoon(); }, { passive: true });
-  track.addEventListener("touchstart", () => { touching = true; }, { passive: true });
-  const release = () => { touching = false; settleSoon(); };
-  track.addEventListener("touchend", release, { passive: true });
-  track.addEventListener("touchcancel", release, { passive: true });
+  if (!track.dataset.bound) {
+    track.dataset.bound = "1";
+    track.addEventListener("scroll", () => { requestAnimationFrame(markPager); settleSoon(); }, { passive: true });
+    track.addEventListener("touchstart", () => { touching = true; }, { passive: true });
+    const release = () => { touching = false; settleSoon(); };
+    track.addEventListener("touchend", release, { passive: true });
+    track.addEventListener("touchcancel", release, { passive: true });
+  }
+  const stay = [...track.children].find((sec) => sec.dataset.view === keep) || track.children[0];
+  if (stay) stay.scrollIntoView({ inline: "start" });
   markPager();
+  renderAll();
 }
 // CSS scroll-snap normally lands on a page; this is the safety net for when it doesn't (seen with
 // software-rotated screens): once scrolling stops and no finger is down, glide to the nearest page.
@@ -169,6 +182,15 @@ function tickClock() {
   $("#date").textContent = d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
 }
 
+function renderSettings(sec) {
+  sec.innerHTML = `<h2>Settings</h2>
+    <p class="settings-note">Choose which pages appear in the bar below. Settings stays available.</p>` +
+    PAGES.map((id) => {
+      const on = (S.cfg.views || PAGES).includes(id);
+      return `<button type="button" class="setting-row" data-page="${id}" aria-pressed="${on}">
+        <span>${VIEWS[id].label}</span><b>${on ? "On" : "Off"}</b></button>`;
+    }).join("");
+}
 function renderSlack(sec) {
   let html = `<h2>Slack <small>${S.slack.length ? `<button class="clear" id="clear">clear</button>` : ""}</small></h2>`;
   if (!S.slack.length) html += `<div class="empty">All quiet.<br>DMs and @mentions land here.</div>`;
@@ -257,7 +279,11 @@ const TOKEN = (() => {
   } catch {}
   return t;
 })();
-const authInit = (init = {}) => TOKEN ? { ...init, headers: { Authorization: "Bearer " + TOKEN } } : init;
+const authInit = (init = {}) => {
+  const headers = { ...(init.headers || {}) };
+  if (TOKEN) headers.Authorization = "Bearer " + TOKEN;
+  return { ...init, headers };
+};
 
 function connect() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" +
@@ -288,6 +314,19 @@ document.addEventListener("click", async (e) => {
       if (r.status === 403) alert403(); } catch {}
   }
   if (e.target.id === "clear") fetch("/api/slack/clear", authInit({ method: "POST" }));
+  const page = e.target.closest("[data-page]")?.dataset.page;
+  if (!page) return;
+  const chosen = new Set(S.cfg.views || PAGES);
+  chosen.has(page) ? chosen.delete(page) : chosen.add(page);
+  const views = PAGES.filter((id) => chosen.has(id));
+  try {
+    const r = await fetch("/api/ui-settings", authInit({
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ views }),
+    }));
+    if (!r.ok) return;
+    S.cfg.views = (await r.json()).views;
+    buildShell();
+  } catch {}
 });
 function alert403() { showAlert({ kind: "slack", title: "Spotify Premium needed", body: "Playback controls only work on Premium accounts.", seconds: 4 }); }
 document.addEventListener("keydown", (e) => {

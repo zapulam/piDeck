@@ -11,11 +11,12 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import HTTPConnection
 
-from .config import load_config
+from .config import load_config, load_saved_views, save_views
 from .hub import Hub
 from .sources.agents import AgentEvent, AgentRegistry
 from .sources.slack import SlackFeed, SlackSource
@@ -49,7 +50,14 @@ def same_origin(conn: HTTPConnection) -> bool:
     return not origin or urlparse(origin).netloc.lower() == conn.headers.get("host", "").lower()
 
 
+class UiSettingsBody(BaseModel):
+    """Pages the bottom bar should show. Unknown ids are ignored."""
+
+    views: list[str]
+
+
 def create_app(config_path: str | None = None, mock: Optional[bool] = None, lively: bool = True) -> FastAPI:
+    config_file = Path(config_path) if config_path else Path("config.yaml")
     cfg = load_config(config_path)
     if mock is not None:
         cfg["mock"] = mock
@@ -114,8 +122,13 @@ def create_app(config_path: str | None = None, mock: Optional[bool] = None, live
 
     @app.get("/api/config")
     async def config():
-        return {"views": cfg["views"], "alert_seconds": secs, "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"],
+        return {"views": load_saved_views(config_file, cfg["views"]), "alert_seconds": secs,
+                "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"],
                 "agents_stale_hours": mods["agents"].get("stale_hours", 12)}
+
+    @app.post("/api/ui-settings", dependencies=[Depends(require_access)])
+    async def update_ui_settings(body: UiSettingsBody):
+        return {"views": save_views(config_file, body.views)}
 
     @app.post("/api/agents/event", dependencies=[Depends(require_access)])
     async def agent_event(ev: AgentEvent):
