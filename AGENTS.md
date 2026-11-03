@@ -6,4 +6,4 @@
 - Use feature branches and automatically open a PR when changes are complete. Leave it open for review unless the user asks to merge, and run CI before merging. Published history must not be rewritten without explicit user authorization.
 - Python functions need complete docstrings and arguments on new lines with double indentation. Group functions by workload with titled separators.
 - Log substantive work through the log-work skill in the Obsidian vault. Project ownership is determined by the changed paths and each project note's `repo:` field.
-- Release versions come from `pideck/__init__.py`; tags must match exactly. Release automation must test and smoke-test the exact tagged commit before publishing.
+- Release versions come from `pideck/__init__.py`; tags must match exactly. Release automation must rerun CI against the exact tagged commit before publishing the source archive.

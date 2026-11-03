@@ -117,16 +117,16 @@ def local_server(
 def self_test(
         report: Path,
 ) -> None:
-    """Verify a frozen backend and its bundled UI without opening a native window.
+    """Verify the desktop backend and UI assets without opening a native window.
 
     Args:
-        report: Destination for a JSON success report read by the CI smoke-test runner.
+        report: Destination for a JSON success report used by automated checks.
 
     Raises:
-        ImportError: The packaged webview dependency is unavailable.
-        RuntimeError: A backend or bundled asset check fails.
+        ImportError: The optional webview dependency is unavailable.
+        RuntimeError: A backend or UI asset check fails.
     """
-    import webview  # noqa: F401 -- the frozen package must contain its optional desktop dependency
+    import webview  # noqa: F401 -- confirm the optional desktop dependency is importable
 
     with tempfile.TemporaryDirectory(prefix="pideck-self-test-") as temp:
         with local_server(Path(temp) / "config.yaml", mock=True, port=0) as url:
@@ -226,20 +226,20 @@ def main(
         run_desktop(args.config, args.mock, args.port, args.url, args.on_top)
         return 0
     except Exception as exc:
-        # Avoid logging exception text that might contain a remote URL's token query.
-        logging.error("Desktop startup failed (%s)", type(exc).__name__)
+        # Prefer the exception type in logs when the message may include a remote token query.
+        detail = type(exc).__name__ if "?" in str(exc) else f"{type(exc).__name__}: {exc}"
+        logging.error("Desktop startup failed (%s)", detail)
         message = f"Could not open piDeck: {exc}\n\nLog: {storage / 'desktop.log'}"
         if sys.stderr is not None:
             print(message, file=sys.stderr)
-        else:
-            try:
-                from tkinter import Tk, messagebox
-                root = Tk()
-                root.withdraw()
-                messagebox.showerror("piDeck", message)
-                root.destroy()
-            except Exception:
-                pass
+        try:
+            from tkinter import Tk, messagebox
+            root = Tk()
+            root.withdraw()
+            messagebox.showerror("piDeck", message)
+            root.destroy()
+        except Exception:
+            pass
         return 1
 
 

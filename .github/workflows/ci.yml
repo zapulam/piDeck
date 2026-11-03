@@ -44,11 +44,6 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pytest -q -m "not browser" --junitxml=test-results/junit.xml
-      - name: Package Apple Silicon on the validated test runner
-        if: matrix.os == 'macos-26' && matrix.python == '3.13'
-        uses: ./.github/actions/package-desktop
-        with:
-          platform: macos-arm64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
@@ -120,17 +115,10 @@ jobs:
     with:
       ref: ${{ inputs.ref || github.sha }}
 
-  desktop:
-    name: Desktop packages
-    uses: ./.github/workflows/desktop.yml
-    with:
-      ref: ${{ inputs.ref || github.sha }}
-      targets: '[{"os":"windows-latest","platform":"windows-x64"},{"os":"macos-15-intel","platform":"macos-x64"}]'
-
   required:
     name: CI passed
     if: always()
-    needs: [test, quality, audit, browser, desktop]
+    needs: [test, quality, audit, browser]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

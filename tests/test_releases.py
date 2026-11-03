@@ -1,6 +1,7 @@
 """Version gates, artifact integrity, and contributor-attribution regression tests."""
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import sys
 
@@ -108,17 +109,27 @@ def test_attribution_gate_allows_product_names_and_human_credits():
     assert violations(record) == []
 
 
-"""# --- Frozen app self-test entry point ---"""
+"""# --- Desktop backend self-test and setup scripts ---"""
 
 
-def test_headless_package_validation_reports_backend_assets_and_version(
+def test_headless_desktop_validation_reports_backend_assets_and_version(
         tmp_path,
         monkeypatch,
 ):
-    """The CI entry point checks the actual backend and assets without requiring a GUI."""
+    """The desktop self-test checks the backend and assets without requiring a GUI."""
     monkeypatch.setitem(sys.modules, "webview", SimpleNamespace())
     report = tmp_path / "report.json"
     assert desktop.main(["--self-test", "--report", str(report)]) == 0
     result = json.loads(report.read_text())
     assert result["ok"] and result["version"] == __version__
     assert {"ui-assets", "agent-event", "shutdown"} <= set(result["checks"])
+
+
+def test_desktop_setup_scripts_are_present():
+    """Windows and macOS installs are driven by committed setup scripts, not binary ZIPs."""
+    root = Path(__file__).resolve().parents[1]
+    windows = (root / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8")
+    macos = (root / "scripts" / "setup-macos.sh").read_text(encoding="utf-8")
+    assert "requirements-desktop.txt" in windows and "run-desktop.cmd" in windows
+    assert "requirements-desktop.txt" in macos and "run-desktop" in macos
+    assert "hooks" in windows and "hooks" in macos
