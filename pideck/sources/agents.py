@@ -30,6 +30,24 @@ KINDS = {"claude", "codex"}
 MAX_SESSIONS = 100   # oldest tiles are dropped beyond this
 
 
+"""# --- Event models ---"""
+
+
+class UsageWindow(BaseModel):
+    """A provider-reported account allowance, expressed as percent used."""
+
+    used_pct: float = Field(ge=0, le=100, allow_inf_nan=False)
+    window_minutes: int = Field(gt=0, le=525600)
+    resets_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+
+
+class AccountUsage(BaseModel):
+    """The short and long allowance windows reported by a connected provider."""
+
+    primary: Optional[UsageWindow] = None
+    secondary: Optional[UsageWindow] = None
+
+
 class AgentEvent(BaseModel):
     session_id: str = Field(max_length=128)
     event: Optional[str] = Field(None, max_length=64)      # Claude Code hook_event_name
@@ -38,7 +56,11 @@ class AgentEvent(BaseModel):
     cwd: Optional[str] = Field(None, max_length=512)
     agent: Optional[str] = Field(None, max_length=16)      # which tool: claude (default) or codex
     context_pct: Optional[float] = Field(None, ge=0, le=100)
+    usage: Optional[AccountUsage] = None
     message: Optional[str] = Field(None, max_length=500)
+
+
+"""# --- Session registry ---"""
 
 
 class AgentRegistry:
@@ -50,6 +72,13 @@ class AgentRegistry:
 
     async def handle(self, ev: AgentEvent) -> dict | None:
         now = time.time()
+        if ev.event == "UsageUpdate":
+            await self._update_usage(ev, now)
+            cur = self.agents.get(ev.session_id)
+            if cur is not None and ev.context_pct is not None:
+                cur["context_pct"] = ev.context_pct
+                await self._publish()
+            return cur
         if ev.state is not None:
             if ev.state not in VALID_STATES:
                 raise ValueError(f"unknown state {ev.state!r}")
@@ -87,6 +116,7 @@ class AgentRegistry:
         while len(self.agents) > MAX_SESSIONS:
             del self.agents[min(self.agents, key=lambda k: self.agents[k]["updated_at"])]
         await self._publish()
+        await self._update_usage(ev, now)
 
         if new_state != prev_state and new_state in self.cfg.get("alert_on", []):
             if new_state == "done" and prev_state in (None, "idle"):
@@ -96,6 +126,23 @@ class AgentRegistry:
                 "agent", title, agent["message"] or "", state=new_state, agent=kind, seconds=self.alert_seconds
             )
         return agent
+
+    async def _update_usage(
+            self,
+            ev: AgentEvent,
+            now: float,
+    ) -> None:
+        """Publish account usage separately so status-line updates never change tile state.
+
+        Args:
+            ev: Incoming hook or status-line event containing optional usage windows.
+            now: Server receipt time in Unix seconds.
+        """
+        if ev.usage is None or ev.agent not in KINDS:
+            return
+        usage = dict(self.hub.state.get("agent_usage", {}))
+        usage[ev.agent] = {**ev.usage.model_dump(), "updated_at": now}
+        await self.hub.update("agent_usage", usage)
 
     async def _publish(self) -> None:
         await self.hub.update("agents", list(self.agents.values()))

@@ -131,5 +131,6 @@ def test_first_run_creates_and_saves_a_token(tmp_path, monkeypatch):
     assert generated and len(tok) >= 24 and os.environ["PIDECK_TOKEN"] == tok
     text = (tmp_path / ".env").read_text()
     assert "SPOTIFY_CLIENT_ID=abc" in text and text.count("PIDECK_TOKEN=") == 1 and f"PIDECK_TOKEN={tok}" in text
-    assert (tmp_path / ".env").stat().st_mode & 0o077 == 0                        # owner only
+    if os.name == "posix":
+        assert (tmp_path / ".env").stat().st_mode & 0o077 == 0                    # Unix permission bits
     assert ensure_token(str(tmp_path / "config.yaml")) == (tok, False)              # not regenerated

@@ -114,7 +114,8 @@ def create_app(config_path: str | None = None, mock: Optional[bool] = None, live
 
     @app.get("/api/config")
     async def config():
-        return {"views": cfg["views"], "alert_seconds": secs, "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"]}
+        return {"views": cfg["views"], "alert_seconds": secs, "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"],
+                "agents_stale_hours": mods["agents"].get("stale_hours", 12)}
 
     @app.post("/api/agents/event", dependencies=[Depends(require_access)])
     async def agent_event(ev: AgentEvent):

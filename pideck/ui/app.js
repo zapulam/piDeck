@@ -4,7 +4,7 @@ const VIEWS = {
   now_playing: { label: "Playing", render: renderNow },
   slack:       { label: "Slack",   render: renderSlack },
 };
-const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8 } };
+const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], agent_usage: {}, seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8, agents_stale_hours: 12 } };
 let frame = 0;
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -66,12 +66,50 @@ function currentView() {
 function renderAll() { for (const sec of $("#track").children) VIEWS[sec.dataset.view].render(sec); badges(); }
 
 const ORDER = { waiting: 0, error: 1, working: 2, done: 3, idle: 4 };
+const PROVIDERS = { claude: "Claude", codex: "Codex" };
+function usageDuration(minutes) {
+  return minutes === 10080 ? "Weekly" : minutes % 1440 === 0 ? `${minutes / 1440}d` :
+    minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
+}
+function resetIn(ts) {
+  const minutes = Math.max(1, Math.ceil((ts - Date.now() / 1000) / 60));
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h`;
+}
+function renderUsage(list) {
+  const now = Date.now() / 1000;
+  return `<div class="provider-usage">` + Object.entries(PROVIDERS).filter(([kind]) =>
+    list.some((a) => (a.agent || "claude") === kind) ||
+    now - (S.agent_usage[kind]?.updated_at || 0) < S.cfg.agents_stale_hours * 3600
+  ).map(([kind, name]) => {
+    const usage = S.agent_usage[kind];
+    const stale = !usage || now - usage.updated_at >= S.cfg.agents_stale_hours * 3600;
+    return `<div class="usage-card" data-provider="${kind}">
+      <div class="usage-title"><b>${name}</b><span>account usage</span></div>` +
+      ["primary", "secondary"].map((key, i) => {
+        const win = usage?.[key];
+        const expired = win?.resets_at != null && win.resets_at <= now;
+        const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.round(win.used_pct) : null;
+        const label = win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h";
+        const detail = expired ? "Awaiting update" : pct == null ? "Unavailable" :
+          win.resets_at ? `Resets in ${resetIn(win.resets_at)}` : "Reset time unavailable";
+        return `<div class="usage-window">
+          <div class="usage-label"><span>${label}</span><b>${pct == null ? "—" : pct + "% used"}</b></div>
+          <div class="usage-track ${pct == null ? "unknown" : ""}" ${pct == null ? "" :
+            `role="progressbar" aria-label="${name} ${label} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"`}
+            style="--used:${pct ?? 0}%;--usage-color:var(${pct >= 90 ? "--error" : pct >= 75 ? "--working" : "--done"})"><div></div></div>
+          <div class="usage-detail">${detail}</div></div>`;
+      }).join("") + `<div class="usage-updated">${usage ? `Updated ${ago(usage.updated_at)}` : "Waiting for usage data"}</div></div>`;
+  }).join("") + `</div>`;
+}
 function renderAgents(sec) {
   const list = [...S.agents].sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
   const w = list.filter((a) => a.state === "working").length, n = list.filter((a) => a.state === "waiting").length;
-  let html = `<h2>Claude agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
+  let html = `<h2>Agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
+  html += renderUsage(list);
   if (!list.length) {
-    html += `<div class="empty">No agents yet.<br>Start a Claude Code session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
+    html += `<div class="empty">No agents yet.<br>Start a Claude Code or Codex session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
   } else {
     html += `<div class="grid">` + list.map((a) => {
       const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
@@ -79,7 +117,9 @@ function renderAgents(sec) {
       return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" style="--ctx:${ctx ?? 0}%">
         <canvas width="12" height="12"></canvas>
         <div class="name">${esc(a.name)}</div>
-        <div class="meta"><b>${status}</b>${ctx != null ? " · " + ctx + "% ctx" : a.agent === "codex" ? " · codex" : ""}</div>
+        <div class="meta"><b>${status}</b> · ${a.agent === "codex" ? "Codex" : "Claude"}</div>
+        <div class="context-label">Context ${ctx != null ? ctx + "%" : "unavailable"}</div>
+        ${ctx == null ? "" : `<div class="context-track" role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"><div></div></div>`}
         <div class="meta" data-ago="${a.state_since}">${ago(a.state_since)}</div>
       </div>`;
     }).join("") + `</div>`;
@@ -249,5 +289,6 @@ function applyRotate() {
   setInterval(() => { frame++; animateTiles(); }, 450);
   setInterval(() => { tickProgress(); tickClock(); }, 500);
   setInterval(() => document.querySelectorAll("[data-ago]").forEach((el) => (el.textContent = ago(+el.dataset.ago))), 15000);
+  setInterval(() => { const sec = $("#v-agents"); if (sec) renderAgents(sec); }, 15000);
   S.initialized = false;
 })();
