@@ -26,7 +26,7 @@ EVENT_STATE: dict[str, Optional[str]] = {
     "SessionEnd": None,
 }
 VALID_STATES = {"idle", "working", "waiting", "done", "error"}
-KINDS = {"claude", "codex"}
+KINDS = {"claude", "codex", "cursor"}
 MAX_SESSIONS = 100   # oldest tiles are dropped beyond this
 
 
@@ -75,7 +75,7 @@ class AgentRegistry:
         if ev.event == "UsageUpdate":
             await self._update_usage(ev, now)
             cur = self.agents.get(ev.session_id)
-            if cur is not None and ev.context_pct is not None:
+            if cur is not None and "context_pct" in ev.model_fields_set:
                 cur["context_pct"] = ev.context_pct
                 await self._publish()
             return cur
@@ -106,7 +106,7 @@ class AgentRegistry:
             "cwd": ev.cwd or (cur or {}).get("cwd"),
             "state": new_state,
             "context_pct": ev.context_pct
-            if ev.context_pct is not None
+            if "context_pct" in ev.model_fields_set
             else (cur or {}).get("context_pct"),
             "message": ev.message or ((cur or {}).get("message") if new_state == prev_state else None),
             "updated_at": now,

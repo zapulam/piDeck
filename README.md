@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" alt="piDeck" width="420">
 </h1>
 
-<p align="center"><b>A Raspberry Pi desk display:</b> Claude Code and Codex agent status, Spotify now-playing, and Slack notifications in one app. Swipe between pages; important events take over the whole screen.</p>
+<p align="center"><b>A desk display for Raspberry Pi, Windows, and macOS:</b> Claude Code, Codex, and Cursor agent status, Spotify now-playing, and Slack notifications in one app. Swipe between pages; important events take over the whole screen.</p>
 
 <p align="center">
   <a href="https://github.com/zapulam/piDeck/actions/workflows/ci.yml"><img src="https://github.com/zapulam/piDeck/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -52,12 +52,43 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 - **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Account cards show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
 - **Codex CLI** — the same tiles, context bars, and account usage cards. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
+- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. Account allowances are unavailable through the hook interface. [Setup](#cursor)
 - **Spotify** — now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
 - **Slack** — DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
 
 Each one can be switched off under `modules:` in `config.yaml`, and the pages you see are listed under `views:`. Spotify, Slack and Codex are covered by automated tests with simulated data; they haven't been run against live accounts yet, so expect to tune a little on first use. Want another source? A new integration is one module in `pideck/sources/` plus one page renderer in `pideck/ui/app.js`.
 
 ## Setup
+
+### Desktop: Windows and macOS
+
+piDeck can run in a small native window with no Raspberry Pi. Install the optional desktop dependencies and launch it from this repository:
+
+```bash
+python -m pip install -r requirements-desktop.txt
+python -m pideck.desktop
+```
+
+The resizable window starts at 520×720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. The local server binds only to `127.0.0.1:8765`, regardless of the regular server's host setting, so hooks on the same computer can connect to `http://localhost:8765` without a token:
+
+```bash
+python hooks/install.py --url http://localhost:8765
+```
+
+Desktop configuration, `.env`, logs, and the persistent browser profile live under `%LOCALAPPDATA%/piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Place your `config.yaml` and optional Spotify/Slack credentials there, or pass `--config /path/to/config.yaml`. The regular Pi/server command still uses its existing configuration paths. Use `--port` to choose another local port and point the hooks at that port as well.
+
+To view an existing Pi server instead, use `python -m pideck.desktop --url "http://YOUR-PI:8765/?token=YOUR_PIDECK_TOKEN"`. This starts only a window; the Pi continues to run the server. The token is remembered in the desktop profile. If another local server already occupies the configured port, close it or use `--url http://localhost:8765` to view it.
+
+**Double-clickable builds.** The manually triggered **Desktop builds** workflow produces a Windows app folder containing `piDeck.exe` and a macOS `.app` bundle, without requiring Python on the viewer's computer. Download and extract the entire platform archive before opening it. These builds are unsigned; macOS builds are not notarized. Windows uses the [WebView2 Runtime](https://pywebview.flowrl.com/guide/installation.html#windows); macOS uses WebKit. The build workflow does not publish releases automatically.
+
+You can also build for the current operating system locally:
+
+```bash
+python -m pip install -r requirements-desktop.txt pyinstaller
+python -m PyInstaller --noconfirm --windowed --name piDeck --add-data "pideck/ui:pideck/ui" --collect-all webview --hidden-import uvicorn.logging --hidden-import uvicorn.protocols.http.h11_impl --hidden-import uvicorn.protocols.websockets.websockets_impl --hidden-import uvicorn.lifespan.on desktop_launcher.py
+```
+
+Open `dist/piDeck/piDeck.exe` on Windows or `dist/piDeck.app` on macOS. Build each platform's app on that platform. Hook installation on agent computers still uses the separate Python hook installer above; it is not bundled into the desktop executable.
 
 ### 1. On the Raspberry Pi: the server and the screen
 
@@ -113,6 +144,20 @@ Claude account usage comes from the documented [status-line payload](https://cod
 Codex context and allowance usage come from recent local `token_count` records: the last request's token usage divided by the reported context-window size, plus the `codex` account rate-limit bucket. The hook uses `transcript_path` when supplied, or finds the matching session ID under `$CODEX_HOME/sessions` (default `~/.codex/sessions`), including in notify mode. It reads only the last 256 KiB, and sends only the resulting percentages and reset times. These local logs can vary by Codex version; missing metrics stay unavailable. The account-window meanings match the [official OpenAI documentation](https://developers.openai.com/codex/app-server#auth-endpoints).
 
 Differences from Claude Code: Codex has no session-end event, so a finished tile stays until it goes stale (`stale_hours`) or you clear it; the needs-you state only appears if your Codex version emits a `PermissionRequest` hook event. Lifecycle integration still needs checking against your installed Codex version.
+
+### Cursor
+
+The hook installer auto-detects `~/.cursor`, or you can select it explicitly:
+
+```bash
+python hooks/install.py --cursor --url http://YOUR-PI:8765 --token YOUR_PIDECK_TOKEN
+```
+
+It merges piDeck's flat hook entries into `~/.cursor/hooks.json`, preserves other hooks and settings, and backs up the original file. Reinstalling is safe; `--dry-run` changes nothing and `--uninstall` removes only piDeck entries. Restart Cursor after installation. See [Cursor's hook documentation](https://cursor.com/docs/hooks) for version and environment support.
+
+Conversation IDs produce one tile across turns. Prompt submission and tool completion report working; `stop` reports done, cancelled, or error; session end removes the tile. A denied tool reports needs-you, although hooks do not provide a general signal for every approval prompt. piDeck does not block actions or send follow-up prompts, and it does not forward your prompts, email address, or tool inputs.
+
+Cursor exposes `context_usage_percent` on `preCompact`, rather than a continuous context feed. piDeck labels that bar **Before compact** and clears it on the next lifecycle update so the pre-compaction snapshot is not mistaken for current usage. Account allowance percentages are not part of Cursor's documented hooks, so its account card says unavailable instead of showing Claude/Codex-style quota bars. No personal billing cookies or private usage endpoints are used. Live Cursor integration still needs verification with your installed version.
 
 ### Spotify
 

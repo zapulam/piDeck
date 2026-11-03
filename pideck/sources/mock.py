@@ -22,6 +22,7 @@ AGENT_NAMES = [
     "dash-v2", "chat-app", "forecast", "docs-site", "infra-tf", "slack-bot", "scratch",
 ]
 CODEX = {"docs-site", "infra-tf", "scratch", "forecast"}
+CURSOR = {"dash-v2", "chat-app"}
 SLACK = [
     ("dm", "Maya", "DM", "got a sec? the churn model numbers look off for Q3"),
     ("mention", "Devon", "#data-team", "@zack can you review the PR for the feature store?"),
@@ -51,8 +52,8 @@ async def seed(hub: Hub, agents: AgentRegistry, slack: SlackFeed) -> None:
               "done", "done", "idle", "done"]
     for i, (name, st) in enumerate(zip(AGENT_NAMES, states)):
         await agents.handle(AgentEvent(session_id=f"mock-{i}", state=st, name=name,
-                                       agent="codex" if name in CODEX else "claude",
-                                       context_pct=random.Random(i).randint(8, 92)))
+                                       agent="cursor" if name in CURSOR else "codex" if name in CODEX else "claude",
+                                       context_pct=None if name in CURSOR else random.Random(i).randint(8, 92)))
         a = agents.agents[f"mock-{i}"]
         a["state_since"] = a["updated_at"] = now - random.Random(i + 40).choice([20, 90, 400, 1500, 7200, 90000])
     await agents._publish()
@@ -86,8 +87,8 @@ async def run(hub: Hub, agents: AgentRegistry, slack: SlackFeed, lively: bool = 
             nxt = {"idle": "working", "working": rng.choice(["done", "waiting"]),
                    "waiting": "working", "done": "working"}[cur]
             await agents.handle(AgentEvent(session_id=sid, state=nxt, name=AGENT_NAMES[i],
-                                           agent="codex" if AGENT_NAMES[i] in CODEX else "claude",
-                                           context_pct=rng.randint(8, 95)))
+                                           agent="cursor" if AGENT_NAMES[i] in CURSOR else "codex" if AGENT_NAMES[i] in CODEX else "claude",
+                                           context_pct=None if AGENT_NAMES[i] in CURSOR else rng.randint(8, 95)))
         elif roll < 0.8:
             kind, user, chan, text = rng.choice(SLACK)
             await slack.push(kind=kind, user=user, channel=chan, text=text)
