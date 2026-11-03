@@ -105,6 +105,24 @@ def test_desktop_remote_window_does_not_start_a_server(
     assert calls[1]["icon"].endswith("pideck.ico" if sys.platform == "win32" else "pideck.png")
 
 
+def test_desktop_cli_uses_repo_config_and_env(
+        monkeypatch,
+        tmp_path,
+):
+    """Launching from a checkout uses that folder's config.yaml, which loads the repo .env."""
+    seen = {}
+    (tmp_path / "config.yaml").write_text("server:\n  port: 8765\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(desktop, "run_desktop", lambda *args, **kwargs: seen.update(config=args[0]))
+    assert desktop.main([]) == 0
+    assert seen["config"] == (tmp_path / "config.yaml").resolve()
+    other = tmp_path / "empty"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    assert desktop.main([]) == 0
+    assert seen["config"] is None
+
+
 def test_desktop_closes_owned_server_when_window_start_fails(
         monkeypatch,
         tmp_path,

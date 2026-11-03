@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 TAIL_BYTES = 256 * 1024
@@ -79,6 +80,40 @@ def transcript_records(
         return
 
 
+def _reset_timestamp(
+        value,
+):
+    """Convert a provider reset time to Unix seconds.
+
+    Args:
+        value: Unix seconds, milliseconds, or an ISO-8601 timestamp.
+
+    Returns:
+        A non-negative Unix timestamp, or None when the value is absent or unusable.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                reset = float(text)
+            except ValueError:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                reset = parsed.timestamp()
+        else:
+            reset = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(reset) or reset < 0:
+        return None
+    if reset > 10_000_000_000:  # providers sometimes send milliseconds
+        reset /= 1000
+    return reset
+
+
 def usage_window(
         data,
         percent_key,
@@ -97,16 +132,19 @@ def usage_window(
     if not isinstance(data, dict):
         return None
     try:
-        pct = float(data[percent_key])
+        pct = None
+        for key in (percent_key, "used_percentage", "used_percent", "utilization"):
+            if key in data and data[key] is not None:
+                pct = float(data[key])
+                break
+        if pct is None:
+            return None
         duration = int(minutes)
-        reset = data.get("resets_at")
-        reset = float(reset) if reset is not None else None
         if not math.isfinite(pct) or not 0 <= pct <= 100 or not 0 < duration <= 525600:
             return None
-        if reset is not None and (not math.isfinite(reset) or reset < 0):
-            return None
+        reset = _reset_timestamp(data.get("resets_at", data.get("resetsAt")))
         return {"used_pct": pct, "window_minutes": duration, "resets_at": reset}
-    except (KeyError, TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

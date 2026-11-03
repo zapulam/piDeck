@@ -29,9 +29,18 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
             page.on("pageerror", lambda error: errors.append(str(error)))
             try:
                 page.goto(url)
-                page.wait_for_selector('.usage-card[data-provider="cursor"]')
-                assert page.locator(".usage-card").count() == 3
-                assert page.locator('.usage-card[data-provider="cursor"] [role="progressbar"]').count() == 0
+                page.wait_for_selector('.usage-meter[data-provider="cursor"]')
+                assert page.locator(".usage-meter").count() == 3
+                assert page.locator('.usage-meter[data-provider="cursor"] [role="progressbar"]').count() == 0
+                outline = page.locator('.tile[data-state="working"]').first.evaluate("el => getComputedStyle(el).borderTopColor")
+                assert outline != "rgb(38, 46, 64)"
+                assert page.locator("#pager button").first.evaluate("el => getComputedStyle(el).cursor") == "pointer"
+                with httpx.Client(base_url=url, trust_env=False) as client:
+                    client.post("api/agents/event", json={"session_id": "ui-done", "state": "working", "name": "notes", "agent": "claude"})
+                    client.post("api/agents/event", json={"session_id": "ui-done", "state": "done", "name": "notes", "agent": "claude"})
+                    page.locator(".done-card", has_text="notes finished").wait_for()
+                    page.locator(".done-card", has_text="notes finished").click()
+                    page.locator(".done-card").wait_for(state="hidden")
                 assert page.locator("#v-agents").evaluate("el => el.scrollWidth <= el.clientWidth")
                 with httpx.Client(base_url=url, trust_env=False) as client:
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "state": "working", "agent": "cursor"})

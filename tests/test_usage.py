@@ -118,6 +118,10 @@ def test_claude_statusline_uses_reported_context_and_handles_missing_windows():
     assert "private" not in json.dumps(event) and "cost" not in event
     assert "usage" not in hook.build_statusline_event({"session_id": "s"})
     assert hook.usage_window({"used_percentage": float("nan")}, "used_percentage", 300) is None
+    iso = hook.usage_window({"used_percentage": 40, "resets_at": "2026-11-04T18:00:00Z"}, "used_percentage", 300)
+    assert iso["used_pct"] == 40 and iso["resets_at"] > 1_700_000_000
+    kept = hook.usage_window({"utilization": 12, "resets_at": "not-a-time"}, "used_percentage", 300)
+    assert kept == {"used_pct": 12, "window_minutes": 300, "resets_at": None}
 
 
 """# --- Status-line lifecycle ---"""

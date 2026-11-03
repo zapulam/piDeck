@@ -228,6 +228,8 @@ def main(
         parser.error("--report requires --self-test")
     if args.url and (args.config or args.mock or args.port is not None):
         parser.error("--url cannot be combined with local server options")
+    if args.config is None and not args.url and Path("config.yaml").is_file():
+        args.config = Path("config.yaml").resolve()
     storage = data_directory()
     storage.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=storage / "desktop.log", level=logging.INFO,

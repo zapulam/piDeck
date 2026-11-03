@@ -40,6 +40,7 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 #pager { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; height: 44px; display: flex; justify-content: center; align-items: center; gap: 10px; }
 #pager button { position: relative; background: none; border: 0; color: var(--dim); font: 600 12px var(--font); letter-spacing: .12em;
   text-transform: uppercase; padding: 10px 14px; border-radius: 999px; }
+button, #alert, .done-card { cursor: pointer; }
 #pager button.on { color: var(--text); background: rgba(255,255,255,.1); }
 #pager .badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--waiting);
   color: #fff; font-size: 10px; line-height: 16px; text-align: center; padding: 0 4px; }
@@ -49,24 +50,22 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 @keyframes pulse { 50% { opacity: .25; } }
 
 /* ---------- agents ---------- */
-.provider-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; margin-bottom: 12px; }
-.provider-usage:empty { display: none; }
-.usage-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
-.usage-title, .usage-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.usage-title { font-size: 13px; margin-bottom: 10px; }
-.usage-title span, .usage-updated, .usage-detail { color: var(--dim); font-size: 10px; }
-.usage-window + .usage-window { margin-top: 10px; }
-.usage-label { font-size: 11px; margin-bottom: 5px; }
-.usage-label b { font-weight: 500; }
-.usage-track, .context-track { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.agents-page { display: flex; flex-direction: column; overflow: hidden; }
+.agents-main { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.agents-main::-webkit-scrollbar { display: none; }
+.usage-dock { display: flex; gap: 12px; flex: none; padding-top: 8px; border-top: 1px solid var(--line); }
+.usage-dock:empty { display: none; }
+.usage-meter { flex: 1; min-width: 0; }
+.usage-meter > b { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+.usage-pair { display: grid; gap: 3px; }
+.usage-label { display: flex; justify-content: space-between; gap: 6px; font-size: 10px; color: var(--dim); }
+.usage-label b { font-weight: 500; color: var(--text); }
+.usage-track, .context-track { height: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .usage-track > div { height: 100%; width: var(--used); background: var(--usage-color); }
 .usage-track.unknown { background: repeating-linear-gradient(110deg, var(--line) 0 5px, var(--panel-2) 5px 10px); }
-.usage-detail { margin-top: 4px; }
-.usage-updated { margin-top: 10px; }
-.usage-unavailable { font-size: 12px; color: var(--dim); margin-top: 16px; }
-.usage-card[data-provider=cursor] .usage-detail { line-height: 1.6; margin-top: 8px; }
+.usage-unavailable { font-size: 10px; color: var(--dim); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
-.tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
+.tile { position: relative; background: var(--panel); border: 2px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
   display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
 .context-label { color: var(--dim); font-size: 10px; }
 .context-track { width: 85%; height: 3px; }
@@ -75,10 +74,10 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 .tile .name { font-size: 13px; font-weight: 700; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile .meta { font-size: 11px; color: var(--dim); white-space: nowrap; }
 .tile .meta b { color: var(--c); font-weight: 600; }
-.tile[data-state=working] { --c: var(--working); border-color: color-mix(in srgb, var(--working) 55%, transparent); }
+.tile[data-state=working] { --c: var(--working); border-color: var(--working); }
 .tile[data-state=waiting] { --c: var(--waiting); border-color: var(--waiting); animation: glow 1.4s ease-in-out infinite; }
-.tile[data-state=done]    { --c: var(--done); }
-.tile[data-state=idle]    { --c: var(--idle); }
+.tile[data-state=done]    { --c: var(--done); border-color: var(--done); }
+.tile[data-state=idle]    { --c: var(--idle); border-color: var(--idle); }
 .tile[data-state=error]   { --c: var(--error); border-color: var(--error); }
 @keyframes glow { 50% { box-shadow: 0 0 18px -2px var(--waiting); } }
 .empty { color: var(--dim); text-align: center; padding: 60px 20px; line-height: 1.7; font-size: 13px; }
@@ -124,6 +123,14 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 #alert-title { font-size: 26px; font-weight: 800; }
 #alert-body { font-size: 17px; color: #c3cbdc; max-width: 90%; line-height: 1.4; }
 #alert-hint { position: absolute; bottom: 26px; font-size: 11px; color: var(--dim); letter-spacing: .15em; text-transform: uppercase; }
+#done-stack { position: absolute; z-index: 11; right: 18px; bottom: 58px; width: 230px; height: 210px; pointer-events: none; }
+#done-stack:empty { display: none; }
+.done-card { position: absolute; right: 0; bottom: 0; width: 196px; pointer-events: auto; display: flex; gap: 8px; align-items: center;
+  padding: 10px; border: 2px solid var(--done); border-radius: 14px; background: #10241e;
+  box-shadow: 0 14px 28px rgba(0,0,0,.45); transform: translate(var(--x), var(--y)) rotate(var(--rot)); }
+.done-card canvas { width: 42px; height: 42px; image-rendering: pixelated; flex: none; }
+.done-card b { display: block; font-size: 13px; }
+.done-card span { display: block; margin-top: 2px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 @keyframes pop { from { transform: scale(.96); opacity: 0; } }
 
 /* ---------- landscape (and any wide stage) ---------- */

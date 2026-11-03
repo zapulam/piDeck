@@ -71,47 +71,35 @@ function usageDuration(minutes) {
   return minutes === 10080 ? "Weekly" : minutes % 1440 === 0 ? `${minutes / 1440}d` :
     minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
 }
-function resetIn(ts) {
-  const minutes = Math.max(1, Math.ceil((ts - Date.now() / 1000) / 60));
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-  return `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h`;
-}
 function renderUsage(list) {
   const now = Date.now() / 1000;
-  return `<div class="provider-usage">` + Object.entries(PROVIDERS).filter(([kind]) =>
+  const meters = Object.entries(PROVIDERS).filter(([kind]) =>
     list.some((a) => (a.agent || "claude") === kind) ||
     now - (S.agent_usage[kind]?.updated_at || 0) < S.cfg.agents_stale_hours * 3600
   ).map(([kind, name]) => {
-    if (kind === "cursor") return `<div class="usage-card" data-provider="cursor">
-      <div class="usage-title"><b>Cursor</b><span>account usage</span></div>
-      <div class="usage-unavailable">Account limits unavailable</div>
-      <div class="usage-detail">Cursor hooks don't report account allowances.</div></div>`;
+    if (kind === "cursor") return `<div class="usage-meter" data-provider="cursor"><b>Cursor</b>
+      <div class="usage-unavailable">Account limits unavailable</div></div>`;
     const usage = S.agent_usage[kind];
     const stale = !usage || now - usage.updated_at >= S.cfg.agents_stale_hours * 3600;
-    return `<div class="usage-card" data-provider="${kind}">
-      <div class="usage-title"><b>${name}</b><span>account usage</span></div>` +
-      ["primary", "secondary"].map((key, i) => {
-        const win = usage?.[key];
-        const expired = win?.resets_at != null && win.resets_at <= now;
-        const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.round(win.used_pct) : null;
-        const label = win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h";
-        const detail = expired ? "Awaiting update" : pct == null ? "Unavailable" :
-          win.resets_at ? `Resets in ${resetIn(win.resets_at)}` : "Reset time unavailable";
-        return `<div class="usage-window">
-          <div class="usage-label"><span>${label}</span><b>${pct == null ? "—" : pct + "% used"}</b></div>
-          <div class="usage-track ${pct == null ? "unknown" : ""}" ${pct == null ? "" :
-            `role="progressbar" aria-label="${name} ${label} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"`}
-            style="--used:${pct ?? 0}%;--usage-color:var(${pct >= 90 ? "--error" : pct >= 75 ? "--working" : "--done"})"><div></div></div>
-          <div class="usage-detail">${detail}</div></div>`;
-      }).join("") + `<div class="usage-updated">${usage ? `Updated ${ago(usage.updated_at)}` : "Waiting for usage data"}</div></div>`;
-  }).join("") + `</div>`;
+    const bars = ["primary", "secondary"].map((key, i) => {
+      const win = usage?.[key];
+      const expired = win?.resets_at != null && win.resets_at <= now;
+      const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.round(win.used_pct) : null;
+      const label = win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h";
+      const detail = pct == null ? "—" : pct + "%";
+      return `<div class="usage-label"><span>${label}</span><b>${detail}</b></div>
+        <div class="usage-track ${pct == null ? "unknown" : ""}" ${pct == null ? "" :
+          `role="progressbar" aria-label="${name} ${label} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"`}
+          style="--used:${pct ?? 0}%;--usage-color:var(${pct >= 90 ? "--error" : pct >= 75 ? "--working" : "--done"})"><div></div></div>`;
+    }).join("");
+    return `<div class="usage-meter" data-provider="${kind}"><b>${name}</b><div class="usage-pair">${bars}</div></div>`;
+  });
+  return meters.length ? `<div class="usage-dock">${meters.join("")}</div>` : "";
 }
 function renderAgents(sec) {
   const list = [...S.agents].sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
   const w = list.filter((a) => a.state === "working").length, n = list.filter((a) => a.state === "waiting").length;
   let html = `<h2>Agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
-  html += renderUsage(list);
   if (!list.length) {
     html += `<div class="empty">No agents yet.<br>Start a Claude Code, Codex, or Cursor session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
   } else {
@@ -128,7 +116,8 @@ function renderAgents(sec) {
       </div>`;
     }).join("") + `</div>`;
   }
-  sec.innerHTML = html;
+  sec.classList.add("agents-page");
+  sec.innerHTML = `<div class="agents-main">${html}</div>${renderUsage(list)}`;
   animateTiles();
 }
 function animateTiles() {
@@ -195,13 +184,43 @@ function badges() {
 }
 
 // ---------- alerts ----------
-let alertTimer = null, alertFrame = null;
+let alertTimer = null, alertFrame = null, doneSeq = 0;
+const doneAlerts = [];
 function envelope(canvas) {
   const c = canvas.getContext("2d"); c.clearRect(0, 0, 12, 12);
   c.fillStyle = "#ffc86b"; c.fillRect(1, 3, 10, 7);
   c.fillStyle = "#7a4d0e"; for (let i = 0; i < 5; i++) { c.fillRect(1 + i, 3 + i, 1, 1); c.fillRect(10 - i, 3 + i, 1, 1); }
 }
+function renderDoneStack() {
+  const root = $("#done-stack");
+  root.innerHTML = doneAlerts.map((a, i) => {
+    const depth = doneAlerts.length - 1 - i;
+    const rot = ((i % 2 ? 1 : -1) * (4 + depth * 3)) + "deg";
+    const x = (depth * -10) + "px";
+    const y = (depth * -16) + "px";
+    return `<button type="button" class="done-card" data-id="${a.id}" data-name="${esc(a.name)}" data-kind="${a.agent || "claude"}"
+      style="--rot:${rot};--x:${x};--y:${y};z-index:${i + 1}">
+      <canvas width="12" height="12"></canvas>
+      <div><b>${esc(a.title)}</b><span>click to dismiss</span></div>
+    </button>`;
+  }).join("");
+  animateDoneStack();
+}
+function animateDoneStack() {
+  document.querySelectorAll(".done-card").forEach((card) =>
+    drawCreature($("canvas", card), { state: "done", name: card.dataset.name, kind: card.dataset.kind, frame }));
+}
+function dismissDone(id) {
+  const index = doneAlerts.findIndex((a) => a.id === id);
+  if (index >= 0) doneAlerts.splice(index, 1);
+  renderDoneStack();
+}
 function showAlert(a) {
+  if (a.kind === "agent" && a.state === "done") {
+    doneAlerts.push({ ...a, id: ++doneSeq, name: (a.title || "").replace(/ finished$/, "") });
+    renderDoneStack();
+    return;
+  }
   const el = $("#alert");
   el.className = a.kind === "agent" ? "agent-" + a.state : a.kind;
   $("#alert-title").textContent = a.title;
@@ -260,6 +279,8 @@ function connect() {
 
 // ---------- boot ----------
 document.addEventListener("click", async (e) => {
+  const done = e.target.closest(".done-card");
+  if (done) return dismissDone(+done.dataset.id);
   if (e.target.closest("#alert")) return hideAlert();
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act) {
@@ -273,7 +294,7 @@ document.addEventListener("keydown", (e) => {
   const t = $("#track");
   if (e.key === "ArrowRight") t.scrollBy({ left: t.clientWidth, behavior: "smooth" });
   if (e.key === "ArrowLeft") t.scrollBy({ left: -t.clientWidth, behavior: "smooth" });
-  if (e.key === "Escape") hideAlert();
+  if (e.key === "Escape") doneAlerts.length ? dismissDone(doneAlerts[doneAlerts.length - 1].id) : hideAlert();
 });
 
 // Rotate the whole UI in software (0/90/180/270). Prefer rotating the display in the OS; this is the
@@ -290,7 +311,7 @@ function applyRotate() {
   buildShell();
   renderAll();
   connect();
-  setInterval(() => { frame++; animateTiles(); }, 450);
+  setInterval(() => { frame++; animateTiles(); animateDoneStack(); }, 450);
   setInterval(() => { tickProgress(); tickClock(); }, 500);
   setInterval(() => document.querySelectorAll("[data-ago]").forEach((el) => (el.textContent = ago(+el.dataset.ago))), 15000);
   setInterval(() => { const sec = $("#v-agents"); if (sec) renderAgents(sec); }, 15000);
