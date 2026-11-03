@@ -26,6 +26,16 @@ from . import __version__
 """# --- Configuration helpers ---"""
 
 
+def window_icon() -> str:
+    """Return the raspberry icon used for the desktop window and shortcuts.
+
+    Returns:
+        Absolute path to a Windows .ico or a PNG for other platforms.
+    """
+    name = "pideck.ico" if sys.platform == "win32" else "pideck.png"
+    return str(Path(__file__).resolve().parent / "assets" / name)
+
+
 def data_directory() -> Path:
     """Return the platform's per-user piDeck data directory without creating it.
 
@@ -186,7 +196,7 @@ def run_desktop(
     with source as address:
         webview.create_window("piDeck", address, width=520, height=720,
                               min_size=(360, 400), on_top=on_top, background_color="#0b0d12")
-        webview.start(private_mode=False, storage_path=str(storage / "webview"))
+        webview.start(private_mode=False, storage_path=str(storage / "webview"), icon=window_icon())
 
 
 def main(
