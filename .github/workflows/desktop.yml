@@ -22,7 +22,7 @@ jobs:
         include:
           - os: windows-latest
             platform: windows-x64
-          - os: macos-15
+          - os: macos-26
             platform: macos-arm64
           - os: macos-15-intel
             platform: macos-x64
