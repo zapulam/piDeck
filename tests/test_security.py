@@ -9,12 +9,25 @@ from pideck.sources.agents import MAX_SESSIONS
 BODY = {"session_id": "s", "event": "SessionStart"}
 
 
-def make(monkeypatch, token="sekret", **kw):
+def make(
+        monkeypatch,
+        token="sekret",
+        **kw,
+):
+    """Create a security test client without relying on a platform-specific working directory.
+
+    Args:
+        monkeypatch: Pytest helper for temporary authentication environment changes.
+        token: Shared test token, or an empty string to test an unconfigured server.
+        **kw: Additional arguments for FastAPI's TestClient.
+
+    Returns:
+        A client whose explicit nonexistent config path excludes developer settings.
+    """
     if token:
         monkeypatch.setenv("PIDECK_TOKEN", token)
     else:
         monkeypatch.delenv("PIDECK_TOKEN", raising=False)
-    monkeypatch.chdir("/tmp")
     return TestClient(create_app("/nonexistent/config.yaml"), **kw)
 
 
