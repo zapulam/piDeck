@@ -63,6 +63,8 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 .usage-track.unknown { background: repeating-linear-gradient(110deg, var(--line) 0 5px, var(--panel-2) 5px 10px); }
 .usage-detail { margin-top: 4px; }
 .usage-updated { margin-top: 10px; }
+.usage-unavailable { font-size: 12px; color: var(--dim); margin-top: 16px; }
+.usage-card[data-provider=cursor] .usage-detail { line-height: 1.6; margin-top: 8px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
 .tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
   display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }

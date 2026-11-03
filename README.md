@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" alt="piDeck" width="420">
 </h1>
 
-<p align="center"><b>A Raspberry Pi desk display:</b> Claude Code and Codex agent status, Spotify now-playing, and Slack notifications in one app. Swipe between pages; important events take over the whole screen.</p>
+<p align="center"><b>A desk display for Raspberry Pi, Windows, and macOS:</b> Claude Code, Codex, and Cursor agent status, Spotify now-playing, and Slack notifications in one app. Swipe between pages; important events take over the whole screen.</p>
 
 <p align="center">
   <a href="https://github.com/zapulam/piDeck/actions/workflows/ci.yml"><img src="https://github.com/zapulam/piDeck/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -52,12 +52,44 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 - **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Account cards show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
 - **Codex CLI** — the same tiles, context bars, and account usage cards. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
+- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. Account allowances are unavailable through the hook interface. [Setup](#cursor)
 - **Spotify** — now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
 - **Slack** — DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
 
 Each one can be switched off under `modules:` in `config.yaml`, and the pages you see are listed under `views:`. Spotify, Slack and Codex are covered by automated tests with simulated data; they haven't been run against live accounts yet, so expect to tune a little on first use. Want another source? A new integration is one module in `pideck/sources/` plus one page renderer in `pideck/ui/app.js`.
 
 ## Setup
+
+### Desktop: Windows and macOS
+
+piDeck can run in a small native window with no Raspberry Pi. Install the optional desktop dependencies and launch it from this repository:
+
+```bash
+python -m pip install -r requirements-desktop.txt
+python -m pideck.desktop
+```
+
+The resizable window starts at 520×720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. The local server binds only to `127.0.0.1:8765`, regardless of the regular server's host setting, so hooks on the same computer can connect to `http://localhost:8765` without a token:
+
+```bash
+python hooks/install.py --url http://localhost:8765
+```
+
+Desktop configuration, `.env`, logs, and the persistent browser profile live under `%LOCALAPPDATA%/piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Place your `config.yaml` and optional Spotify/Slack credentials there, or pass `--config /path/to/config.yaml`. The regular Pi/server command still uses its existing configuration paths. Use `--port` to choose another local port and point the hooks at that port as well.
+
+To view an existing Pi server instead, use `python -m pideck.desktop --url "http://YOUR-PI:8765/?token=YOUR_PIDECK_TOKEN"`. This starts only a window; the Pi continues to run the server. The token is remembered in the desktop profile. If another local server already occupies the configured port, close it or use `--url http://localhost:8765` to view it.
+
+**Double-clickable builds.** [GitHub Releases](https://github.com/zapulam/piDeck/releases) provides versioned Windows x64, Apple Silicon, and Intel Mac ZIPs. Extract the entire platform archive before opening `piDeck.exe` or the `.app` bundle; Python is not needed on the viewer's computer. PR and main-branch builds are also available as workflow artifacts. These builds are unsigned; macOS builds are not notarized. Windows uses the [WebView2 Runtime](https://pywebview.flowrl.com/guide/installation.html#windows); macOS uses WebKit.
+
+You can also build for the current operating system locally:
+
+```bash
+python -m pip install -r requirements-build.txt
+python -m scripts.build_desktop --platform windows-x64
+python -m scripts.smoke_desktop --executable-dir dist
+```
+
+For macOS, use `--platform macos-arm64` or `--platform macos-x64` on a matching Mac. Open `dist/piDeck/piDeck.exe` on Windows or `dist/piDeck.app` on macOS. The archive contains a dependency/version/commit manifest and the license. Build each platform's app on that platform. The automated packaged smoke test checks backend startup, UI assets, agent events, and shutdown without a display server; it does not verify native GUI rendering. Hook installation on agent computers still uses the separate Python hook installer above; it is not bundled into the desktop executable.
 
 ### 1. On the Raspberry Pi: the server and the screen
 
@@ -114,6 +146,20 @@ Codex context and allowance usage come from recent local `token_count` records: 
 
 Differences from Claude Code: Codex has no session-end event, so a finished tile stays until it goes stale (`stale_hours`) or you clear it; the needs-you state only appears if your Codex version emits a `PermissionRequest` hook event. Lifecycle integration still needs checking against your installed Codex version.
 
+### Cursor
+
+The hook installer auto-detects `~/.cursor`, or you can select it explicitly:
+
+```bash
+python hooks/install.py --cursor --url http://YOUR-PI:8765 --token YOUR_PIDECK_TOKEN
+```
+
+It merges piDeck's flat hook entries into `~/.cursor/hooks.json`, preserves other hooks and settings, and backs up the original file. Reinstalling is safe; `--dry-run` changes nothing and `--uninstall` removes only piDeck entries. Restart Cursor after installation. See [Cursor's hook documentation](https://cursor.com/docs/hooks) for version and environment support.
+
+Conversation IDs produce one tile across turns. Prompt submission and tool completion report working; `stop` reports done, cancelled, or error; session end removes the tile. A denied tool reports needs-you, although hooks do not provide a general signal for every approval prompt. piDeck does not block actions or send follow-up prompts, and it does not forward your prompts, email address, or tool inputs.
+
+Cursor exposes `context_usage_percent` on `preCompact`, rather than a continuous context feed. piDeck labels that bar **Before compact** and clears it on the next lifecycle update so the pre-compaction snapshot is not mistaken for current usage. Account allowance percentages are not part of Cursor's documented hooks, so its account card says unavailable instead of showing Claude/Codex-style quota bars. No personal billing cookies or private usage endpoints are used. Live Cursor integration still needs verification with your installed version.
+
 ### Spotify
 
 1. Create an app at <https://developer.spotify.com/dashboard>, add redirect URI `http://127.0.0.1:8888/callback`.
@@ -134,8 +180,24 @@ You get DMs to the bot and @mentions of it in channels it's invited to. To watch
 
 ```bash
 pip install -r requirements-dev.txt
-pytest
+pytest -m "not browser"
+python -m playwright install chromium
+pytest -m browser
 ```
+
+CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The same pipeline builds and smoke-tests Windows x64, macOS arm64, and macOS x64 desktop packages; the ARM package reuses its Python 3.13 test runner. The stable required check is **CI passed**, which succeeds only after every validation and package check passes.
+
+All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. The attribution gate rejects bot/AI authors, committers, and credit trailers; ordinary product names and human credits remain allowed.
+
+## Releases
+
+The version in `pideck/__init__.py` is the source of truth. After merging a tested version change, create a matching tag such as `v0.1.0` on `main` and push it. The **Release** workflow validates the tag/version and main-branch ancestry, reruns CI against that exact commit, builds all three desktop archives, and creates a draft GitHub Release only after every check succeeds. Pre-release tags such as `v0.2.0-rc.1` must match the version string and are marked as pre-releases.
+
+Each release includes Windows x64, Apple Silicon, and Intel Mac ZIPs, a source ZIP for the Pi/server, `SHA256SUMS`, and GitHub build-provenance attestations. You can check downloads with `sha256sum --check SHA256SUMS` and verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`. Archives preserve macOS bundle permissions. Application signing/notarization requires separate signing credentials and is not provided by build attestations.
+
+Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads all assets, and then publishes only when requested; an interrupted draft can be retried, but published releases are never overwritten. A draft build still runs the full CI and packaging pipeline.
+
+When accepting dependency or other generated updates, commit them with the maintainer account and remove bot credit trailers before merging. Repository guidance and project-scoped Claude attribution settings reinforce this rule; GitHub's contributor display may still take time to refresh after a history cleanup.
 
 ## Security
 

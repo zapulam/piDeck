@@ -1,31 +1,145 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python: ["3.11", "3.13"]
+        include:
+          - os: macos-15-intel
+            python: "3.11"
+          - os: macos-26
+            python: "3.13"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: pip install -r requirements.txt pytest websockets
-      - run: pytest -q
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q -m "not browser" --junitxml=test-results/junit.xml
+      - name: Package Apple Silicon on the validated test runner
+        if: matrix.os == 'macos-26' && matrix.python == '3.13'
+        uses: ./.github/actions/package-desktop
+        with:
+          platform: macos-arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.python }}
+          path: test-results/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
-  audit:
+  quality:
+    name: Code and workflow checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.13"
-      - run: pip install pip-audit
-      - run: pip-audit -r requirements.txt
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - run: python -m pip install ruff==0.17.3
+      - run: python -m ruff check --select E9,F63,F7,F82 .
+      - run: node --check pideck/ui/app.js
+      - run: node --check pideck/ui/creature.js
+      - run: python scripts/check_attribution.py
+      - name: Check GitHub Actions workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          gh release download v1.7.12 --repo rhysd/actionlint --pattern actionlint_1.7.12_linux_amd64.tar.gz --pattern actionlint_1.7.12_checksums.txt --dir "$RUNNER_TEMP/actionlint"
+          cd "$RUNNER_TEMP/actionlint"
+          sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt
+          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/actionlint/actionlint" -color
+
+  browser:
+    name: Chromium integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q -m browser
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: browser-screenshots
+          path: test-results/browser
+          if-no-files-found: ignore
+          retention-days: 14
+
+  audit:
+    name: Dependency audit
+    uses: ./.github/workflows/audit.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
+
+  desktop:
+    name: Desktop packages
+    uses: ./.github/workflows/desktop.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
+      targets: '[{"os":"windows-latest","platform":"windows-x64"},{"os":"macos-15-intel","platform":"macos-x64"}]'
+
+  required:
+    name: CI passed
+    if: always()
+    needs: [test, quality, audit, browser, desktop]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          assert all(job["result"] == "success" for job in json.loads(os.environ["RESULTS"]).values()), os.environ["RESULTS"]
+          PY

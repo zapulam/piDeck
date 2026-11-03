@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code / Codex hook -> piDeck. Stdlib only, fast, and never allowed to break your session.
+"""Claude Code / Codex / Cursor hook -> piDeck. Stdlib only and never allowed to break your session.
 
 Two ways in, same script:
 
@@ -7,6 +7,7 @@ Two ways in, same script:
       (session_id, cwd, hook_event_name, ...). Tell us which tool it is with --source:
           python3 pideck_hook.py                    # Claude Code (default)
           python3 pideck_hook.py --source codex     # Codex CLI
+          python3 pideck_hook.py --source cursor    # Cursor's camelCase hook events
 
   Codex `notify` (fallback if you don't use hooks): Codex passes ONE JSON string as the last
   command-line argument instead of stdin and only reports "turn finished". Detected automatically.
@@ -36,6 +37,16 @@ import urllib.request
 from pathlib import Path
 
 TAIL_BYTES = 256 * 1024
+CURSOR_EVENTS = {
+    "sessionStart": "SessionStart",
+    "beforeSubmitPrompt": "UserPromptSubmit",
+    "preToolUse": "PreToolUse",
+    "postToolUse": "PostToolUse",
+    "postToolUseFailure": "PostToolUse",
+    "stop": "Stop",
+    "sessionEnd": "SessionEnd",
+    "preCompact": "UsageUpdate",
+}
 
 
 """# --- Usage helpers ---"""
@@ -210,6 +221,8 @@ def build_event(
     Returns:
         A piDeck event containing only the selected display fields and metrics.
     """
+    if source == "cursor":
+        return build_cursor_event(payload, env)
     ev = {
         "session_id": payload.get("session_id") or "unknown",
         "event": payload.get("hook_event_name"),
@@ -228,6 +241,49 @@ def build_event(
         pct = context_pct(payload["transcript_path"], float(env.get("PIDECK_CONTEXT_WINDOW", 200000)))
         if pct is not None:
             ev["context_pct"] = pct
+    return ev
+
+
+def build_cursor_event(
+        payload,
+        env,
+):
+    """Translate Cursor hooks without forwarding prompts, tool inputs, or account identity.
+
+    Args:
+        payload: Cursor's documented hook input, keyed by conversation_id.
+        env: Environment mapping supporting the PIDECK_NAME tile label override.
+
+    Returns:
+        A piDeck lifecycle or context-only event, or None for unrelated hooks.
+        Context is cleared on later activity because preCompact is only a snapshot.
+    """
+    event = CURSOR_EVENTS.get(payload.get("hook_event_name"))
+    sid = payload.get("conversation_id") or payload.get("session_id")
+    if event is None or not sid:
+        return None
+    roots = payload.get("workspace_roots") or []
+    ev = {
+        "session_id": "cursor:" + str(sid),
+        "event": event,
+        "agent": "cursor",
+        "cwd": payload.get("cwd") or (roots[0] if roots else None),
+        "context_pct": None,
+    }
+    if env.get("PIDECK_NAME"):
+        ev["name"] = env["PIDECK_NAME"]
+    if event == "UsageUpdate":
+        pct = payload.get("context_usage_percent")
+        if isinstance(pct, (int, float)) and math.isfinite(pct) and 0 <= pct <= 100:
+            ev["context_pct"] = pct
+    elif event == "Stop":
+        status = payload.get("status")
+        if status == "error":
+            ev["state"] = "error"
+        elif status == "aborted":
+            ev["state"] = "idle"
+    elif payload.get("hook_event_name") == "postToolUseFailure" and payload.get("failure_type") == "permission_denied":
+        ev["state"] = "waiting"
     return ev
 
 
@@ -335,6 +391,8 @@ def post(ev, env):
 
 
 def main():
+    source = "claude"
+    cursor_response = {}
     try:
         if "--statusline" in sys.argv[1:]:
             run_statusline(sys.stdin.read(), os.environ)
@@ -343,11 +401,22 @@ def main():
         if notify is not None:
             ev = build_notify_event(json.loads(notify), os.environ)
         else:
-            ev = build_event(json.load(sys.stdin), os.environ, source)
+            payload = json.loads(sys.stdin.buffer.read())
+            if source == "cursor":
+                event = payload.get("hook_event_name")
+                if event == "beforeSubmitPrompt":
+                    cursor_response = {"continue": True}
+                elif event == "preToolUse":
+                    cursor_response = {"permission": "allow"}
+            ev = build_event(payload, os.environ, source)
         if ev:
             post(ev, os.environ)
     except Exception:
         pass  # the display being offline must never affect the agent
+    finally:
+        if source == "cursor":
+            # Cursor permission hooks require a valid response, even if piDeck is offline.
+            print(json.dumps(cursor_response))
     return 0  # and print nothing: Codex treats stray stdout from a Stop hook as a failure
 
 

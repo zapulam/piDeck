@@ -1,0 +1,155 @@
+"""Cursor lifecycle, context snapshots, privacy, and installation coverage."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
+import install
+import pideck_hook as hook
+
+
+"""# --- Cursor payloads and registry ---"""
+
+
+@pytest.mark.parametrize("event, expected", [
+    ("sessionStart", "idle"), ("beforeSubmitPrompt", "working"),
+    ("postToolUse", "working"), ("stop", "done"),
+])
+def test_cursor_hooks_roundtrip(
+        client,
+        event,
+        expected,
+):
+    """Map documented Cursor hook names and stable conversation IDs to provider tiles."""
+    payload = {"hook_event_name": event, "conversation_id": "conversation", "generation_id": "turn",
+               "workspace_roots": ["C:/work/project"], "status": "completed",
+               "prompt": "private prompt", "user_email": "private@example.com", "tool_input": {"secret": "private"}}
+    outgoing = hook.build_event(payload, {}, "cursor")
+    assert "private" not in json.dumps(outgoing)
+    response = client.post("/api/agents/event", json=outgoing)
+    assert response.status_code == 200
+    agent = response.json()["agent"]
+    assert (agent["id"], agent["agent"], agent["name"], agent["state"]) == (
+        "cursor:conversation", "cursor", "project", expected)
+
+
+def test_cursor_compaction_snapshot_is_cleared_by_later_activity(
+        client,
+):
+    """Use Cursor's reported context snapshot, then clear it rather than implying live usage."""
+    base = {"conversation_id": "c", "workspace_roots": ["/work/project"]}
+    start = hook.build_event({**base, "hook_event_name": "beforeSubmitPrompt"}, {}, "cursor")
+    client.post("/api/agents/event", json=start)
+    compact = hook.build_event({**base, "hook_event_name": "preCompact", "context_usage_percent": 85}, {}, "cursor")
+    agent = client.post("/api/agents/event", json=compact).json()["agent"]
+    assert agent["state"] == "working" and agent["context_pct"] == 85
+    stop = hook.build_event({**base, "hook_event_name": "stop", "status": "completed"}, {}, "cursor")
+    agent = client.post("/api/agents/event", json=stop).json()["agent"]
+    assert agent["context_pct"] is None and agent["state"] == "done"
+    end = hook.build_event({"session_id": "c", "hook_event_name": "sessionEnd"}, {}, "cursor")
+    assert client.post("/api/agents/event", json=end).json()["agent"] is None
+    assert client.app.state.hub.state["agents"] == []
+
+
+@pytest.mark.parametrize("payload, expected", [
+    ({"hook_event_name": "stop", "status": "error"}, "error"),
+    ({"hook_event_name": "stop", "status": "aborted"}, "idle"),
+    ({"hook_event_name": "postToolUseFailure", "failure_type": "permission_denied"}, "waiting"),
+])
+def test_cursor_failures_and_cancellation(
+        client,
+        payload,
+        expected,
+):
+    """Represent errors, cancellation, and denied tools without inventing successful completion."""
+    event = hook.build_event({**payload, "conversation_id": "c"}, {}, "cursor")
+    assert client.post("/api/agents/event", json=event).json()["agent"]["state"] == expected
+
+
+def test_cursor_ignores_unrelated_hooks_and_invalid_context():
+    """Missing conversation identity and non-agent hooks cannot create anonymous tiles."""
+    assert hook.build_event({"hook_event_name": "workspaceOpen"}, {}, "cursor") is None
+    assert hook.build_event({"hook_event_name": "stop"}, {}, "cursor") is None
+    event = hook.build_event({"hook_event_name": "preCompact", "conversation_id": "c",
+                              "context_usage_percent": 200}, {}, "cursor")
+    assert event["context_pct"] is None and "usage" not in event
+
+
+@pytest.mark.parametrize("event, expected", [
+    ("beforeSubmitPrompt", {"continue": True}), ("postToolUse", {}),
+])
+def test_cursor_returns_valid_hook_json_when_display_is_offline(
+        event,
+        expected,
+):
+    """An unavailable piDeck must not turn the prompt hook into a blocking invalid response."""
+    script = Path(__file__).parent.parent / "hooks" / "pideck_hook.py"
+    result = subprocess.run([sys.executable, str(script), "--source", "cursor"],
+                            input=json.dumps({"hook_event_name": event, "conversation_id": "c"}),
+                            text=True, capture_output=True, timeout=5,
+                            env={**os.environ, "PIDECK_URL": "http://127.0.0.1:1"})
+    assert result.returncode == 0 and result.stderr == ""
+    assert json.loads(result.stdout) == expected
+
+
+"""# --- Cursor installation ---"""
+
+
+def test_cursor_install_is_idempotent_and_preserves_user_hooks(
+        tmp_path,
+):
+    """Install flat Cursor hooks, retain custom entries, and remove only piDeck on uninstall."""
+    path = tmp_path / ".cursor" / "hooks.json"
+    path.parent.mkdir()
+    original = {"version": 1, "custom": True, "hooks": {
+        "stop": [{"command": "echo original"}], "afterFileEdit": [{"command": "echo format"}]}}
+    path.write_text(json.dumps(original))
+    args = ["--url", "http://localhost:8765", "--no-check", "--cursor"]
+    assert install.main(args, home=tmp_path) == 0
+    first = path.read_text()
+    settings = json.loads(first)
+    assert settings["hooks"]["stop"][0] == original["hooks"]["stop"][0]
+    assert settings["hooks"]["stop"][1]["command"].endswith("--source cursor")
+    assert "hooks" not in settings["hooks"]["stop"][1]
+    assert install.main(args, home=tmp_path) == 0
+    assert path.read_text() == first
+    assert install.main(["--uninstall"], home=tmp_path) == 0
+    assert json.loads(path.read_text()) == original
+
+
+def test_cursor_autodetection_and_explicit_provider_selection(
+        tmp_path,
+):
+    """Auto-detect Cursor while explicit flags restrict installation to selected providers."""
+    for folder in (".cursor", ".claude", ".codex"):
+        (tmp_path / folder).mkdir()
+    base = ["--url", "http://localhost:8765", "--no-check"]
+    assert install.main([*base, "--cursor"], home=tmp_path) == 0
+    assert (tmp_path / ".cursor/hooks.json").exists()
+    assert not (tmp_path / ".claude/settings.json").exists()
+    assert not (tmp_path / ".codex/hooks.json").exists()
+    assert install.main(base, home=tmp_path) == 0
+    assert (tmp_path / ".claude/settings.json").exists()
+    assert (tmp_path / ".codex/hooks.json").exists()
+
+
+def test_cursor_dry_run_and_unsupported_config_are_unchanged(
+        tmp_path,
+):
+    """Dry runs and unsupported Cursor schemas must leave the user's file untouched."""
+    path = tmp_path / ".cursor/hooks.json"
+    path.parent.mkdir()
+    original = '{"version": 1, "hooks": {}}'
+    path.write_text(original)
+    args = ["--url", "http://localhost:8765", "--no-check", "--cursor", "--dry-run"]
+    assert install.main(args, home=tmp_path) == 0
+    assert path.read_text() == original
+    assert not (tmp_path / ".config").exists()
+    path.write_text('{"version": 9, "hooks": {}}')
+    with pytest.raises(install.InstallError):
+        install.update_cursor_hooks(path, tmp_path / "pideck_hook.py", False)
+    assert json.loads(path.read_text())["version"] == 9

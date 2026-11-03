@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-command setup for the piDeck hooks (Claude Code and Codex CLI). Stdlib only.
+"""One-command setup for piDeck hooks (Claude Code, Codex, and Cursor). Stdlib only.
 
     python3 hooks/install.py --url http://pideck.local:8765 --token YOUR_TOKEN
 
@@ -8,6 +8,7 @@ What it does, and nothing else:
   2. copies the hook script next to it, so this repo can live anywhere (or be deleted)
   3. adds piDeck's hooks to ~/.claude/settings.json and/or ~/.codex/hooks.json, leaving every
      other setting and hook alone, after saving a one-time backup of the file
+     (Cursor uses flat entries in ~/.cursor/hooks.json; Claude's status line is wrapped)
   4. with --test, makes a test tile appear on the display so you know it works
 
 Run it again any time to update; it never creates duplicates. `--uninstall` removes it all.
@@ -27,6 +28,7 @@ MARK = "pideck_hook.py"  # how we recognise our own hook entries
 
 CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SessionEnd"]
 CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]  # Codex has no Notification/SessionEnd
+CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "sessionEnd"]
 
 
 class InstallError(Exception):
@@ -59,7 +61,7 @@ def strip_ours(hooks: dict) -> dict:
 
 def command_for(script: Path, source: str) -> str:
     cmd = f'"{sys.executable}" "{script}"'
-    return cmd + (" --source codex" if source == "codex" else "")
+    return cmd + (f" --source {source}" if source != "claude" else "")
 
 
 def read_json(path: Path) -> dict:
@@ -173,6 +175,56 @@ def install_statusline(
     return write_json(path, data, dry)
 
 
+"""# --- Cursor hook integration ---"""
+
+
+def update_cursor_hooks(
+        path: Path,
+        script: Path,
+        dry: bool,
+        uninstall: bool = False,
+) -> bool:
+    """Install or remove piDeck's flat Cursor hooks while retaining unrelated entries.
+
+    Args:
+        path: User-level .cursor/hooks.json file.
+        script: Installed hook script path; unused during removal.
+        dry: Whether to report changes without writing settings.
+        uninstall: Whether to remove rather than install piDeck entries.
+
+    Returns:
+        True when the settings file would change, otherwise False.
+
+    Raises:
+        InstallError: The existing version or hook structure cannot be safely edited.
+    """
+    if uninstall and not path.exists():
+        return False
+    data = read_json(path)
+    if data.get("version", 1) != 1:
+        raise InstallError(f"{path} has an unsupported Cursor hooks version; it was left unchanged.")
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict) or any(
+            not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries)
+            for entries in hooks.values()):
+        raise InstallError(f"{path} has an unsupported Cursor hooks structure; it was left unchanged.")
+    kept = {}
+    removed = False
+    for event, entries in hooks.items():
+        remaining = [entry for entry in entries if not _is_ours(entry)]
+        removed = removed or len(remaining) != len(entries)
+        if remaining or not entries:
+            kept[event] = remaining
+    if uninstall and not removed:
+        return False
+    if not uninstall:
+        for event in CURSOR_EVENTS:
+            kept.setdefault(event, []).append({"command": command_for(script, "cursor"), "timeout": 5})
+        data.setdefault("version", 1)
+    data["hooks"] = kept
+    return write_json(path, data, dry)
+
+
 """# --- Shared settings and installation ---"""
 
 
@@ -249,11 +301,12 @@ def run_test(url: str, token: str) -> None:
 
 def main(argv=None, home: Path = None) -> int:
     home = home or Path.home()
-    ap = argparse.ArgumentParser(description="Install piDeck hooks for Claude Code and/or Codex CLI.")
+    ap = argparse.ArgumentParser(description="Install piDeck hooks for Claude Code, Codex, and Cursor.")
     ap.add_argument("--url", help="piDeck address, e.g. http://pideck.local:8765")
     ap.add_argument("--token", default="", help="the server's PIDECK_TOKEN, if it has one")
     ap.add_argument("--claude", action="store_true", help="install for Claude Code")
     ap.add_argument("--codex", action="store_true", help="install for Codex CLI")
+    ap.add_argument("--cursor", action="store_true", help="install for Cursor")
     ap.add_argument("--test", action="store_true", help="show a test tile on the display afterwards")
     ap.add_argument("--no-check", action="store_true", help="don't verify the server is reachable first")
     ap.add_argument("--dry-run", action="store_true", help="show what would change, change nothing")
@@ -263,15 +316,20 @@ def main(argv=None, home: Path = None) -> int:
 
     claude_file = home / ".claude" / "settings.json"
     codex_file = home / ".codex" / "hooks.json"
+    cursor_file = home / ".cursor" / "hooks.json"
     # no flag given: do whatever is installed on this machine
-    want_claude = a.claude or (not a.codex and (home / ".claude").exists())
-    want_codex = a.codex or (not a.claude and (home / ".codex").exists())
+    auto = not (a.claude or a.codex or a.cursor)
+    want_claude = a.claude or (auto and (home / ".claude").exists())
+    want_codex = a.codex or (auto and (home / ".codex").exists())
+    want_cursor = a.cursor or (auto and (home / ".cursor").exists())
 
     try:
         if a.uninstall:
             for label, f in (("Claude Code", claude_file), ("Codex", codex_file)):
                 if uninstall_target(f, dry):
                     print(f"{'Would remove' if dry else 'Removed'} piDeck hooks from {f} ({label})")
+            if update_cursor_hooks(cursor_file, conf_dir(home) / MARK, dry, uninstall=True):
+                print(f"{'Would remove' if dry else 'Removed'} piDeck hooks from {cursor_file} (Cursor)")
             if not dry:
                 shutil.rmtree(conf_dir(home), ignore_errors=True)
             print("Uninstalled." if not dry else "(dry run: nothing changed)")
@@ -279,10 +337,10 @@ def main(argv=None, home: Path = None) -> int:
 
         if not a.url:
             ap.error("--url is required (e.g. --url http://pideck.local:8765)")
-        if not (want_claude or want_codex):
+        if not (want_claude or want_codex or want_cursor):
             raise InstallError(
-                "Couldn't find Claude Code (~/.claude) or Codex (~/.codex) on this machine. "
-                "Use --claude or --codex to install for one anyway."
+                "Couldn't find Claude Code (~/.claude), Codex (~/.codex), or Cursor (~/.cursor) on this machine. "
+                "Use --claude or --codex or --cursor to install for one anyway."
             )
         if not a.no_check:
             check_server(a.url, a.token)
@@ -301,12 +359,16 @@ def main(argv=None, home: Path = None) -> int:
             print(f"Codex: {'hooks added to' if changed else 'already up to date in'} {codex_file}")
             print("  If Codex doesn't report in, your version may need hooks switched on: add\n"
                   "  [features]\\n  codex_hooks = true   to ~/.codex/config.toml")
+        if want_cursor:
+            changed = update_cursor_hooks(cursor_file, script, dry)
+            print(f"Cursor: {'hooks added to' if changed else 'already up to date in'} {cursor_file}")
+            print("  Context is reported before compaction; account allowances are not exposed by Cursor hooks.")
         if dry:
             print("(dry run: nothing changed)")
             return 0
         if a.test:
             run_test(a.url, a.token)
-        print("Done. Restart any open Claude Code / Codex sessions so they pick up the hooks.")
+        print("Done. Restart any open Claude Code / Codex / Cursor sessions so they pick up the hooks.")
         return 0
     except InstallError as e:
         print(f"\n{e}", file=sys.stderr)

@@ -66,7 +66,7 @@ function currentView() {
 function renderAll() { for (const sec of $("#track").children) VIEWS[sec.dataset.view].render(sec); badges(); }
 
 const ORDER = { waiting: 0, error: 1, working: 2, done: 3, idle: 4 };
-const PROVIDERS = { claude: "Claude", codex: "Codex" };
+const PROVIDERS = { claude: "Claude", codex: "Codex", cursor: "Cursor" };
 function usageDuration(minutes) {
   return minutes === 10080 ? "Weekly" : minutes % 1440 === 0 ? `${minutes / 1440}d` :
     minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
@@ -83,6 +83,10 @@ function renderUsage(list) {
     list.some((a) => (a.agent || "claude") === kind) ||
     now - (S.agent_usage[kind]?.updated_at || 0) < S.cfg.agents_stale_hours * 3600
   ).map(([kind, name]) => {
+    if (kind === "cursor") return `<div class="usage-card" data-provider="cursor">
+      <div class="usage-title"><b>Cursor</b><span>account usage</span></div>
+      <div class="usage-unavailable">Account limits unavailable</div>
+      <div class="usage-detail">Cursor hooks don't report account allowances.</div></div>`;
     const usage = S.agent_usage[kind];
     const stale = !usage || now - usage.updated_at >= S.cfg.agents_stale_hours * 3600;
     return `<div class="usage-card" data-provider="${kind}">
@@ -109,7 +113,7 @@ function renderAgents(sec) {
   let html = `<h2>Agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
   html += renderUsage(list);
   if (!list.length) {
-    html += `<div class="empty">No agents yet.<br>Start a Claude Code or Codex session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
+    html += `<div class="empty">No agents yet.<br>Start a Claude Code, Codex, or Cursor session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
   } else {
     html += `<div class="grid">` + list.map((a) => {
       const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
@@ -117,8 +121,8 @@ function renderAgents(sec) {
       return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" style="--ctx:${ctx ?? 0}%">
         <canvas width="12" height="12"></canvas>
         <div class="name">${esc(a.name)}</div>
-        <div class="meta"><b>${status}</b> · ${a.agent === "codex" ? "Codex" : "Claude"}</div>
-        <div class="context-label">Context ${ctx != null ? ctx + "%" : "unavailable"}</div>
+        <div class="meta"><b>${status}</b> · ${PROVIDERS[a.agent] || "Claude"}</div>
+        <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"} ${ctx != null ? ctx + "%" : "unavailable"}</div>
         ${ctx == null ? "" : `<div class="context-track" role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"><div></div></div>`}
         <div class="meta" data-ago="${a.state_since}">${ago(a.state_since)}</div>
       </div>`;

@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 /shots/
+/build/
+/dist/
+/*.spec
+/test-results/
