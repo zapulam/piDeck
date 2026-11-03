@@ -102,18 +102,78 @@ def install_target(path: Path, events, script: Path, source: str, dry: bool) -> 
     return write_json(path, data, dry)
 
 
-def uninstall_target(path: Path, dry: bool) -> bool:
+def uninstall_target(
+        path: Path,
+        dry: bool,
+) -> bool:
+    """Remove piDeck hooks and restore a wrapped status line without touching other settings.
+
+    Args:
+        path: Claude or Codex settings JSON file to update.
+        dry: Whether to report the change without writing it.
+
+    Returns:
+        True when the settings file would change, otherwise False.
+    """
     if not path.exists():
         return False
     data = read_json(path)
-    if "hooks" not in data:
+    has_statusline = _is_ours(data.get("statusLine") or {})
+    if "hooks" not in data and not has_statusline:
         return False
-    hooks = strip_ours(data["hooks"])
+    hooks = strip_ours(data.get("hooks", {}))
     if hooks:
         data["hooks"] = hooks
     else:
-        del data["hooks"]
+        data.pop("hooks", None)
+    if has_statusline:
+        saved = read_json(conf_dir(path.parent.parent) / "hook.json")
+        original = saved.get("claude_status_line")
+        if original is not None:
+            data["statusLine"] = original
+        else:
+            data.pop("statusLine", None)
     return write_json(path, data, dry)
+
+
+"""# --- Claude usage integration ---"""
+
+
+def install_statusline(
+        home: Path,
+        path: Path,
+        script: Path,
+        dry: bool,
+) -> bool:
+    """Wrap Claude's status line to forward usage while preserving its current output.
+
+    Args:
+        home: Home directory holding the per-user piDeck settings.
+        path: Claude settings JSON path.
+        script: Installed piDeck hook script path.
+        dry: Whether to report changes without writing files.
+
+    Returns:
+        True when the Claude settings would change. Reinstallation is idempotent.
+    """
+    data = read_json(path)
+    original = data.get("statusLine")
+    if _is_ours(original or {}):
+        return False
+    if not dry:
+        cfg = conf_dir(home) / "hook.json"
+        saved = read_json(cfg)
+        saved["claude_status_line"] = original
+        cfg.write_text(json.dumps(saved, indent=2) + "\n")
+    data["statusLine"] = {
+        **(original or {}),
+        "type": "command",
+        "command": command_for(script, "claude") + " --statusline",
+    }
+    return write_json(path, data, dry)
+
+
+"""# --- Shared settings and installation ---"""
 
 
 def save_settings(home: Path, url: str, token: str, dry: bool) -> Path:
@@ -233,7 +293,9 @@ def main(argv=None, home: Path = None) -> int:
         print(f"Saved settings to {cfg}")
         if want_claude:
             changed = install_target(claude_file, CLAUDE_EVENTS, script, "claude", dry)
+            changed = install_statusline(home, claude_file, script, dry) or changed
             print(f"Claude Code: {'hooks added to' if changed else 'already up to date in'} {claude_file}")
+            print("  Account usage connected through the status line; existing output is preserved.")
         if want_codex:
             changed = install_target(codex_file, CODEX_EVENTS, script, "codex", dry)
             print(f"Codex: {'hooks added to' if changed else 'already up to date in'} {codex_file}")

@@ -31,7 +31,8 @@ def test_fresh_install_for_claude(tmp_path):
     assert sorted(s["hooks"]) == sorted(install.CLAUDE_EVENTS)
     assert all("--source codex" not in h["command"] for h in ours(s))
     conf = json.loads((tmp_path / ".config/pideck/hook.json").read_text())
-    assert conf == {"url": URL, "token": "s3cret"}
+    assert conf == {"url": URL, "token": "s3cret", "claude_status_line": None}
+    assert s["statusLine"]["command"].endswith(" --statusline")
     assert (tmp_path / ".config/pideck/pideck_hook.py").exists()          # copied, repo can move
     if os.name == "posix":
         assert (tmp_path / ".config/pideck/hook.json").stat().st_mode & 0o077 == 0  # token not world-readable
@@ -141,6 +142,8 @@ def test_end_to_end_hook_uses_installed_config(tmp_path, live_server):
     (tmp_path / ".claude").mkdir()
     assert install.main(["--url", live_server, "--token", "tok123"], home=tmp_path) == 0
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    if os.name == "nt":
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]  # Winsock needs this even in an isolated environment.
     subprocess.run([sys.executable, str(tmp_path / ".config/pideck/pideck_hook.py")],
                    input='{"session_id":"e2e","hook_event_name":"UserPromptSubmit","cwd":"/w/demo"}',
                    text=True, env=env, check=True)
@@ -152,3 +155,12 @@ def test_end_to_end_hook_uses_installed_config(tmp_path, live_server):
     with connect(live_server.replace("http", "ws") + "/ws") as ws:
         snap = json.loads(ws.recv())
     assert [a["name"] for a in snap["state"]["agents"] if a["id"] == "e2e"] == ["demo"]
+    subprocess.run([sys.executable, str(tmp_path / ".config/pideck/pideck_hook.py"), "--statusline"],
+                   input=json.dumps({"session_id": "e2e", "context_window": {"used_percentage": 33}, "rate_limits": {
+                       "five_hour": {"used_percentage": 14, "resets_at": 2000000000}}}),
+                   text=True, env=env, check=True, capture_output=True)
+    with connect(live_server.replace("http", "ws") + "/ws") as ws:
+        snap = json.loads(ws.recv())
+    assert snap["state"]["agent_usage"]["claude"]["primary"]["used_pct"] == 14
+    agent = next(a for a in snap["state"]["agents"] if a["id"] == "e2e")
+    assert agent["context_pct"] == 33 and agent["state"] == "working"

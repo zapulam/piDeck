@@ -49,10 +49,26 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 @keyframes pulse { 50% { opacity: .25; } }
 
 /* ---------- agents ---------- */
+.provider-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; margin-bottom: 12px; }
+.provider-usage:empty { display: none; }
+.usage-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.usage-title, .usage-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.usage-title { font-size: 13px; margin-bottom: 10px; }
+.usage-title span, .usage-updated, .usage-detail { color: var(--dim); font-size: 10px; }
+.usage-window + .usage-window { margin-top: 10px; }
+.usage-label { font-size: 11px; margin-bottom: 5px; }
+.usage-label b { font-weight: 500; }
+.usage-track, .context-track { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.usage-track > div { height: 100%; width: var(--used); background: var(--usage-color); }
+.usage-track.unknown { background: repeating-linear-gradient(110deg, var(--line) 0 5px, var(--panel-2) 5px 10px); }
+.usage-detail { margin-top: 4px; }
+.usage-updated { margin-top: 10px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
 .tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
   display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
-.tile::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--ctx, 0%); background: var(--c); opacity: .9; }
+.context-label { color: var(--dim); font-size: 10px; }
+.context-track { width: 85%; height: 3px; }
+.context-track > div { height: 100%; width: var(--ctx); background: var(--c); }
 .tile canvas { width: 60px; height: 60px; image-rendering: pixelated; }
 .tile .name { font-size: 13px; font-weight: 700; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile .meta { font-size: 11px; color: var(--dim); white-space: nowrap; }

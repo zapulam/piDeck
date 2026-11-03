@@ -52,10 +52,15 @@ async def seed(hub: Hub, agents: AgentRegistry, slack: SlackFeed) -> None:
     for i, (name, st) in enumerate(zip(AGENT_NAMES, states)):
         await agents.handle(AgentEvent(session_id=f"mock-{i}", state=st, name=name,
                                        agent="codex" if name in CODEX else "claude",
-                                       context_pct=None if name in CODEX else random.Random(i).randint(8, 92)))
+                                       context_pct=random.Random(i).randint(8, 92)))
         a = agents.agents[f"mock-{i}"]
         a["state_since"] = a["updated_at"] = now - random.Random(i + 40).choice([20, 90, 400, 1500, 7200, 90000])
     await agents._publish()
+    for kind, short, weekly in (("claude", 37, 61), ("codex", 18, 42)):
+        await agents.handle(AgentEvent(session_id="mock-usage", event="UsageUpdate", agent=kind, usage={
+            "primary": {"used_pct": short, "window_minutes": 300, "resets_at": now + 7200},
+            "secondary": {"used_pct": weekly, "window_minutes": 10080, "resets_at": now + 259200},
+        }))
     t = TRACKS[0]
     await hub.update("spotify", {
         "id": "mock-0", "title": t[0], "artist": t[1], "album": t[2], "art": _art(t[4], t[5]),
@@ -82,7 +87,7 @@ async def run(hub: Hub, agents: AgentRegistry, slack: SlackFeed, lively: bool = 
                    "waiting": "working", "done": "working"}[cur]
             await agents.handle(AgentEvent(session_id=sid, state=nxt, name=AGENT_NAMES[i],
                                            agent="codex" if AGENT_NAMES[i] in CODEX else "claude",
-                                           context_pct=None if AGENT_NAMES[i] in CODEX else rng.randint(8, 95)))
+                                           context_pct=rng.randint(8, 95)))
         elif roll < 0.8:
             kind, user, chan, text = rng.choice(SLACK)
             await slack.push(kind=kind, user=user, channel=chan, text=text)

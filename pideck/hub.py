@@ -20,7 +20,7 @@ log = logging.getLogger("pideck.hub")
 
 class Hub:
     def __init__(self) -> None:
-        self.state: dict[str, Any] = {"spotify": None, "slack": [], "agents": []}
+        self.state: dict[str, Any] = {"spotify": None, "slack": [], "agents": [], "agent_usage": {}}
         self.clients: set[WebSocket] = set()
 
     async def connect(self, ws: WebSocket) -> None:
