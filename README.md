@@ -187,7 +187,7 @@ pytest -m browser
 
 CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The same pipeline builds and smoke-tests Windows x64, macOS arm64, and macOS x64 desktop packages; the ARM package reuses its Python 3.13 test runner. The stable required check is **CI passed**, which succeeds only after every validation and package check passes.
 
-All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. The attribution gate rejects bot/AI authors, committers, and credit trailers; ordinary product names and human credits remain allowed.
+All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. AI-assisted contributions and Claude, Codex, and Cursor credit trailers are welcome. The attribution gate requires human authors and committers and rejects Dependabot and other bot credit trailers; human and AI tool credits remain allowed.
 
 ## Releases
 
@@ -197,7 +197,7 @@ Each release includes Windows x64, Apple Silicon, and Intel Mac ZIPs, a source Z
 
 Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads all assets, and then publishes only when requested; an interrupted draft can be retried, but published releases are never overwritten. A draft build still runs the full CI and packaging pipeline.
 
-When accepting dependency or other generated updates, commit them with the maintainer account and remove bot credit trailers before merging. Repository guidance and project-scoped Claude attribution settings reinforce this rule; GitHub's contributor display may still take time to refresh after a history cleanup.
+When accepting dependency or AI-assisted updates on Zachary's behalf, keep `Zachary <84103628+zapulam@users.noreply.github.com>` as author and committer and include the assisting tool's own `Co-authored-by` trailer. Preserve human and AI tool credits in pull requests and squash commits, while removing Dependabot and other bot credits. Squash merges default to commit messages; review the merge message to retain tool credit trailers. Repository guidance documents this policy; Claude Code uses its default attribution because the project no longer overrides it. Tool credit trailers can add the credited tools to GitHub's contributor display.
 
 ## Security
 
@@ -207,6 +207,6 @@ piDeck shows private things (Slack messages, what you are listening to, project 
 - **Cross-site and rebinding protection.** Requests and websockets from another web origin are refused, and "this machine" must be reached as `localhost`, so a web page you visit can't read your display or press its buttons.
 - **Limits.** Event fields have length caps, and at most 100 sessions and 16 screens are kept.
 - **Your replies stay on your computer by default.** The hook sends project names, states and short system notifications, not what the assistant said. To also show a 200-character snippet of the last reply on "done" alerts, set `PIDECK_SEND_MESSAGES=1` or `"send_messages": true` in `~/.config/pideck/hook.json`.
-- **Sandboxed service.** `deploy/pideck.service` drops privileges and restricts the filesystem and network families. CI runs `pip-audit`, and Dependabot proposes updates.
+- **Sandboxed service.** `deploy/pideck.service` drops privileges and restricts the filesystem and network families. CI and a scheduled weekly audit run `pip-audit`; dependency updates are maintained manually.
 
 What it does not do: encrypt traffic. The hook talks plain HTTP, so on a network you don't trust, put the Pi and your computer on a private tunnel such as [Tailscale](https://tailscale.com) or WireGuard (or put an HTTPS reverse proxy in front), and use the tunnel address as `--url`. For local-only use, set `server.host: 127.0.0.1`. See [SECURITY.md](SECURITY.md) to report a problem.

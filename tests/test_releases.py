@@ -51,17 +51,53 @@ def test_release_checksums_reject_empty_distribution(
 
 @pytest.mark.parametrize("name, email, message", [
     ("Claude", "noreply@anthropic.com", "Feature"),
+    ("Codex", "noreply@openai.com", "Feature"),
+    ("Cursor", "cursoragent@cursor.com", "Feature"),
     ("dependabot[bot]", "bot@example.com", "Update dependency"),
-    ("Zachary", "user@example.com", "Feature\n\nCo-authored-by: Claude <noreply@anthropic.com>"),
+    ("Zachary", "user@example.com", "Feature\n\nCo-authored-by: dependabot[bot] <bot@example.com>"),
     ("Zachary", "user@example.com", "Feature\n\nSigned-off-by: dependabot[bot] <bot@example.com>"),
+    ("Zachary", "user@example.com", "Feature\n\nCo-authored-by: automation[bot] <bot@example.com>"),
 ])
-def test_attribution_gate_rejects_bots_and_ai_credits(
+def test_attribution_gate_rejects_tool_identities_and_bot_credits(
         name,
         email,
         message,
 ):
-    """Detect unwanted author identities and trailers independently of commit subject text."""
+    """Reject tool/bot authors and bot credit trailers while preserving human ownership."""
     record = "\0".join(["abcdef123456", name, email, "Zachary", "user@example.com", message]) + "\0\0"
+    assert violations(record)
+
+
+@pytest.mark.parametrize("tool, email", [
+    ("Claude", "noreply@anthropic.com"),
+    ("Codex", "noreply@openai.com"),
+    ("Cursor", "cursoragent@cursor.com"),
+])
+@pytest.mark.parametrize("trailer", ["Co-authored-by", "Signed-off-by"])
+def test_attribution_gate_allows_ai_tool_credits(
+        tool,
+        email,
+        trailer,
+):
+    """Allow tool credit trailers when the primary author and committer remain human."""
+    message = f"Feature\n\n{trailer}: {tool} <{email}>"
+    record = "\0".join(["abcdef", "Zachary", "user@example.com", "Zachary", "user@example.com", message]) + "\0\0"
+    assert violations(record) == []
+
+
+@pytest.mark.parametrize("committer, email", [
+    ("Claude", "noreply@anthropic.com"),
+    ("Codex", "noreply@openai.com"),
+    ("Cursor", "cursoragent@cursor.com"),
+    ("automation[bot]", "bot@example.com"),
+])
+def test_attribution_gate_rejects_tool_or_bot_committers(
+        committer,
+        email,
+):
+    """A human author and an allowed tool trailer must not conceal a non-human committer."""
+    message = "Feature\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+    record = "\0".join(["abcdef", "Zachary", "user@example.com", committer, email, message]) + "\0\0"
     assert violations(record)
 
 

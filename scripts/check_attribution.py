@@ -1,8 +1,9 @@
-"""Reject bot and AI attribution in reachable commit identities and credit trailers."""
+"""Require human commit identities while allowing AI tool credit trailers."""
 import re
 import subprocess
 
-BLOCKED = re.compile(r"\b(?:claude|anthropic|codex|openai|dependabot)\b|\[bot\]", re.IGNORECASE)
+BLOCKED_IDENTITIES = re.compile(r"\b(?:claude|anthropic|codex|openai|cursor|dependabot)\b|\[bot\]", re.IGNORECASE)
+BLOCKED_CREDITS = re.compile(r"\bdependabot\b|\[bot\]", re.IGNORECASE)
 TRAILER = re.compile(r"^(?:Co-authored-by|Signed-off-by):", re.IGNORECASE)
 
 
@@ -12,23 +13,23 @@ TRAILER = re.compile(r"^(?:Co-authored-by|Signed-off-by):", re.IGNORECASE)
 def violations(
         history: str,
 ) -> list[str]:
-    """Find unwanted attribution without rejecting product names in ordinary commit text.
+    """Reject tool/bot identities and bot credits while allowing human and AI tool credits.
 
     Args:
         history: NUL-delimited git log records with hash, author, committer, and message.
 
     Returns:
-        Descriptions of invalid identities or attribution trailers, keyed by commit hash.
+        Descriptions of invalid identities or bot credit trailers, keyed by commit hash.
     """
     found = []
     for record in history.split("\0\0"):
         if not record.strip():
             continue
         sha, author, email, committer, committer_email, message = record.lstrip("\n").split("\0", 5)
-        if BLOCKED.search(f"{author} {email} {committer} {committer_email}"):
+        if BLOCKED_IDENTITIES.search(f"{author} {email} {committer} {committer_email}"):
             found.append(f"{sha[:12]}: bot or AI author/committer")
-        if any(TRAILER.match(line) and BLOCKED.search(line) for line in message.splitlines()):
-            found.append(f"{sha[:12]}: bot or AI credit trailer")
+        if any(TRAILER.match(line) and BLOCKED_CREDITS.search(line) for line in message.splitlines()):
+            found.append(f"{sha[:12]}: bot credit trailer")
     return found
 
 
