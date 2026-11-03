@@ -1,33 +1,47 @@
 name: Desktop builds
+
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: windows-latest
+            platform: windows-x64
+          - os: macos-15
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x64
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.13"
           cache: pip
-      - run: python -m pip install -r requirements-desktop.txt pyinstaller
-      - run: >-
-          python -m PyInstaller --noconfirm --windowed --name piDeck
-          --add-data "pideck/ui:pideck/ui" --collect-all webview
-          --hidden-import uvicorn.logging
-          --hidden-import uvicorn.protocols.http.h11_impl
-          --hidden-import uvicorn.protocols.websockets.websockets_impl
-          --hidden-import uvicorn.lifespan.on desktop_launcher.py
-      - if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/piDeck.app dist/piDeck-macOS.zip
-      - if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist/piDeck -DestinationPath dist/piDeck-Windows.zip
-      - uses: actions/upload-artifact@v4
+      - run: python -m pip install -r requirements-build.txt
+      - run: python -m scripts.build_desktop --platform ${{ matrix.platform }}
+      - name: Smoke-test the packaged backend
+        run: python -m scripts.smoke_desktop --executable-dir dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: piDeck-${{ matrix.os }}
+          name: desktop-${{ matrix.platform }}
           path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14

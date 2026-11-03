@@ -8,9 +8,21 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
 @pytest.fixture
-def app(monkeypatch):
+def app(
+        monkeypatch,
+        tmp_path,
+):
+    """Create an isolated app with test authentication and no developer configuration.
+
+    Args:
+        monkeypatch: Pytest helper for temporary environment and directory changes.
+        tmp_path: Platform-independent temporary working directory.
+
+    Returns:
+        A FastAPI application with real sources and no configured external accounts.
+    """
     monkeypatch.setenv("PIDECK_TOKEN", TOKEN)
-    monkeypatch.chdir("/tmp")  # don't pick up a developer's local .env/config.yaml
+    monkeypatch.chdir(tmp_path)  # don't pick up a developer's local .env/config.yaml
     return create_app(config_path="/nonexistent/config.yaml", mock=False)
 
 

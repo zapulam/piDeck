@@ -3,20 +3,24 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager, nullcontext
+import json
 import logging
 import os
 from pathlib import Path
 import socket
 import sys
 import threading
+import tempfile
 import time
 from urllib.parse import urlsplit
+import urllib.request
 
 import uvicorn
 
 from .__main__ import ensure_token
 from .config import load_config
 from .main import create_app
+from . import __version__
 
 
 """# --- Configuration helpers ---"""
@@ -107,6 +111,44 @@ def local_server(
             thread.join(timeout=5)
 
 
+"""# --- Packaged backend self-test ---"""
+
+
+def self_test(
+        report: Path,
+) -> None:
+    """Verify a frozen backend and its bundled UI without opening a native window.
+
+    Args:
+        report: Destination for a JSON success report read by the CI smoke-test runner.
+
+    Raises:
+        ImportError: The packaged webview dependency is unavailable.
+        RuntimeError: A backend or bundled asset check fails.
+    """
+    import webview  # noqa: F401 -- the frozen package must contain its optional desktop dependency
+
+    with tempfile.TemporaryDirectory(prefix="pideck-self-test-") as temp:
+        with local_server(Path(temp) / "config.yaml", mock=True, port=0) as url:
+            for asset in ("", "app.js", "style.css", "creature.js"):
+                with urllib.request.urlopen(url + asset, timeout=5) as response:
+                    if response.status != 200 or not response.read():
+                        raise RuntimeError(f"Missing packaged UI asset: {asset}")
+            with urllib.request.urlopen(url + "api/health", timeout=5) as response:
+                if not json.load(response).get("ok"):
+                    raise RuntimeError("Packaged backend health check failed")
+            request = urllib.request.Request(url + "api/agents/event", data=json.dumps({
+                "session_id": "self-test", "state": "working", "agent": "cursor",
+            }).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if json.load(response)["agent"]["agent"] != "cursor":
+                    raise RuntimeError("Packaged agent event check failed")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"ok": True, "version": __version__, "platform": sys.platform,
+                                 "checks": ["desktop-import", "ui-assets", "health", "agent-event", "shutdown"]}),
+                      encoding="utf-8")
+
+
 """# --- Native window and entry point ---"""
 
 
@@ -164,7 +206,16 @@ def main(
     parser.add_argument("--port", type=int, help="local port (default 8765)")
     parser.add_argument("--url", help="open an existing piDeck server instead of running one")
     parser.add_argument("--on-top", action="store_true", help="keep the window above other windows")
+    parser.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--report", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.self_test:
+        if args.report is None:
+            parser.error("--self-test requires --report")
+        self_test(args.report)
+        return 0
+    if args.report is not None:
+        parser.error("--report requires --self-test")
     if args.url and (args.config or args.mock or args.port is not None):
         parser.error("--url cannot be combined with local server options")
     storage = data_directory()

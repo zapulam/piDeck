@@ -79,16 +79,17 @@ Desktop configuration, `.env`, logs, and the persistent browser profile live und
 
 To view an existing Pi server instead, use `python -m pideck.desktop --url "http://YOUR-PI:8765/?token=YOUR_PIDECK_TOKEN"`. This starts only a window; the Pi continues to run the server. The token is remembered in the desktop profile. If another local server already occupies the configured port, close it or use `--url http://localhost:8765` to view it.
 
-**Double-clickable builds.** The manually triggered **Desktop builds** workflow produces a Windows app folder containing `piDeck.exe` and a macOS `.app` bundle, without requiring Python on the viewer's computer. Download and extract the entire platform archive before opening it. These builds are unsigned; macOS builds are not notarized. Windows uses the [WebView2 Runtime](https://pywebview.flowrl.com/guide/installation.html#windows); macOS uses WebKit. The build workflow does not publish releases automatically.
+**Double-clickable builds.** [GitHub Releases](https://github.com/zapulam/piDeck/releases) provides versioned Windows x64, Apple Silicon, and Intel Mac ZIPs. Extract the entire platform archive before opening `piDeck.exe` or the `.app` bundle; Python is not needed on the viewer's computer. PR and main-branch builds are also available as workflow artifacts. These builds are unsigned; macOS builds are not notarized. Windows uses the [WebView2 Runtime](https://pywebview.flowrl.com/guide/installation.html#windows); macOS uses WebKit.
 
 You can also build for the current operating system locally:
 
 ```bash
-python -m pip install -r requirements-desktop.txt pyinstaller
-python -m PyInstaller --noconfirm --windowed --name piDeck --add-data "pideck/ui:pideck/ui" --collect-all webview --hidden-import uvicorn.logging --hidden-import uvicorn.protocols.http.h11_impl --hidden-import uvicorn.protocols.websockets.websockets_impl --hidden-import uvicorn.lifespan.on desktop_launcher.py
+python -m pip install -r requirements-build.txt
+python -m scripts.build_desktop --platform windows-x64
+python -m scripts.smoke_desktop --executable-dir dist
 ```
 
-Open `dist/piDeck/piDeck.exe` on Windows or `dist/piDeck.app` on macOS. Build each platform's app on that platform. Hook installation on agent computers still uses the separate Python hook installer above; it is not bundled into the desktop executable.
+For macOS, use `--platform macos-arm64` or `--platform macos-x64` on a matching Mac. Open `dist/piDeck/piDeck.exe` on Windows or `dist/piDeck.app` on macOS. The archive contains a dependency/version/commit manifest and the license. Build each platform's app on that platform. The automated packaged smoke test checks backend startup, UI assets, agent events, and shutdown without a display server; it does not verify native GUI rendering. Hook installation on agent computers still uses the separate Python hook installer above; it is not bundled into the desktop executable.
 
 ### 1. On the Raspberry Pi: the server and the screen
 
@@ -179,8 +180,24 @@ You get DMs to the bot and @mentions of it in channels it's invited to. To watch
 
 ```bash
 pip install -r requirements-dev.txt
-pytest
+pytest -m "not browser"
+python -m playwright install chromium
+pytest -m browser
 ```
+
+CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. Once those pass, it builds and smoke-tests Windows x64, macOS arm64, and macOS x64 desktop packages. The stable required check is **CI passed**.
+
+All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. The attribution gate rejects bot/AI authors, committers, and credit trailers; ordinary product names and human credits remain allowed.
+
+## Releases
+
+The version in `pideck/__init__.py` is the source of truth. After merging a tested version change, create a matching tag such as `v0.1.0` on `main` and push it. The **Release** workflow validates the tag/version and main-branch ancestry, reruns CI against that exact commit, builds all three desktop archives, and creates a draft GitHub Release only after every check succeeds. Pre-release tags such as `v0.2.0-rc.1` must match the version string and are marked as pre-releases.
+
+Each release includes Windows x64, Apple Silicon, and Intel Mac ZIPs, a source ZIP for the Pi/server, `SHA256SUMS`, and GitHub build-provenance attestations. You can check downloads with `sha256sum --check SHA256SUMS` and verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`. Archives preserve macOS bundle permissions. Application signing/notarization requires separate signing credentials and is not provided by build attestations.
+
+Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads all assets, and then publishes only when requested; an interrupted draft can be retried, but published releases are never overwritten. A draft build still runs the full CI and packaging pipeline.
+
+When accepting dependency or other generated updates, commit them with the maintainer account and remove bot credit trailers before merging. Repository guidance and project-scoped Claude attribution settings reinforce this rule; GitHub's contributor display may still take time to refresh after a history cleanup.
 
 ## Security
 
