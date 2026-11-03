@@ -5,5 +5,3 @@ changelog:
       - "dependabot[bot]"
       - github-actions
       - "github-actions[bot]"
-      - claude
-      - "claude[bot]"
