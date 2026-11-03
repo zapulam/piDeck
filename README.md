@@ -185,7 +185,7 @@ python -m playwright install chromium
 pytest -m browser
 ```
 
-CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. Once those pass, it builds and smoke-tests Windows x64, macOS arm64, and macOS x64 desktop packages. The stable required check is **CI passed**.
+CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The same pipeline builds and smoke-tests Windows x64, macOS arm64, and macOS x64 desktop packages; the ARM package reuses its Python 3.13 test runner. The stable required check is **CI passed**, which succeeds only after every validation and package check passes.
 
 All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. The attribution gate rejects bot/AI authors, committers, and credit trailers; ordinary product names and human credits remain allowed.
 
