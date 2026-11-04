@@ -10,6 +10,7 @@ from typing import Iterator
 
 import argparse
 from contextlib import contextmanager, nullcontext
+import ctypes
 import json
 import logging
 import os
@@ -31,6 +32,27 @@ from . import __version__
 
 
 # --- Configuration helpers ---
+
+
+def configure_taskbar() -> None:
+    """
+    Give Windows a stable piDeck identity before creating the native window.
+
+    Returns:
+        None: Other platforms are unchanged; Windows failures are logged.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        shell32 = ctypes.WinDLL("shell32")
+        set_app_id = shell32.SetCurrentProcessExplicitAppUserModelID
+        set_app_id.argtypes = [ctypes.c_wchar_p]
+        set_app_id.restype = ctypes.c_long
+        result = set_app_id("piDeck.Desktop")
+        if result != 0:
+            raise OSError(result, "Windows rejected piDeck's taskbar identity")
+    except OSError:
+        logging.getLogger(__name__).warning("Could not set piDeck's taskbar identity", exc_info=True)
 
 
 def window_icon() -> str:
@@ -210,6 +232,7 @@ def run_desktop(
     """
     if url is not None:
         validate_url(url)
+    configure_taskbar()
     try:
         import webview
     except ImportError as exc:
