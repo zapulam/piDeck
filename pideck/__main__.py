@@ -1,3 +1,11 @@
+"""
+
+Configure and launch the piDeck HTTP server from the command line.
+
+"""
+
+from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -12,8 +20,15 @@ from .config import load_config
 from .main import create_app
 
 
+# --- Network and access-token helpers ---
+
 def lan_ip() -> str:
-    """Best guess at this machine's address on the local network (no traffic is sent)."""
+    """
+    Best guess at this machine's address on the local network (no traffic is sent).
+
+    Returns:
+        str: Local network IPv4 address, or localhost when no address can be detected.
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
             sk.connect(("10.255.255.255", 1))
@@ -22,9 +37,19 @@ def lan_ip() -> str:
         return "localhost"
 
 
-def ensure_token(config_path: str) -> tuple[str, bool]:
-    """Return (token, generated). A shared secret is created on first run and saved to .env, so the
-    server is never open to the whole network by accident."""
+def ensure_token(
+    config_path: str,
+    ) -> tuple[str, bool]:
+    """
+    Return (token, generated). A shared secret is created on first run and saved to .env, so the
+    server is never open to the whole network by accident.
+
+    Args:
+        config_path (str): Configuration file whose adjacent .env stores a newly generated token.
+
+    Returns:
+        tuple[str, bool]: Access token and whether this call generated and saved it.
+    """
     tok = os.environ.get("PIDECK_TOKEN", "")
     if tok:
         return tok, False
@@ -41,7 +66,16 @@ def ensure_token(config_path: str) -> tuple[str, bool]:
     return tok, True
 
 
+# --- Server entry point ---
+
+
 def main() -> None:
+    """
+    Parse server options, initialize configuration, and launch piDeck.
+
+    Returns:
+        None: No value is returned.
+    """
     ap = argparse.ArgumentParser(prog="pideck", description="piDeck desk display server")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--mock", action="store_true", help="serve fake data (no accounts needed)")

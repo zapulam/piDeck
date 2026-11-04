@@ -1,9 +1,13 @@
-"""Claude Code agent status.
+"""
+
+Claude Code agent status.
 
 Claude Code hooks POST small events to /api/agents/event (see hooks/pideck_hook.py).
 The registry maps hook events to a display state, tracks one tile per session, and
 raises alerts when an agent finishes or needs input.
+
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +34,7 @@ KINDS = {"claude", "codex", "cursor"}
 MAX_SESSIONS = 100   # oldest tiles are dropped beyond this
 
 
-"""# --- Event models ---"""
+# --- Event models ---
 
 
 class UsageWindow(BaseModel):
@@ -63,27 +67,45 @@ class AgentEvent(BaseModel):
     parent_id: Optional[str] = Field(None, max_length=128)  # set when this tile is a subagent
 
 
-"""# --- Session registry ---"""
+# --- Session registry ---
 
 
 class AgentRegistry:
-    def __init__(self, hub: Hub, cfg: dict, alert_seconds: float = 8) -> None:
+    def __init__(
+        self,
+        hub: Hub,
+        cfg: dict,
+        alert_seconds: float = 8,
+        ) -> None:
+        """
+        Initialize session tracking and agent alert configuration.
+
+        Args:
+            hub (Hub): Shared hub used to publish source state and display alerts.
+            cfg (dict): Configuration options for this integration.
+            alert_seconds (float): Duration in seconds for a full-screen attention or completion
+                alert.
+
+        Returns:
+            None: No value is returned.
+        """
         self.hub = hub
         self.cfg = cfg
         self.alert_seconds = alert_seconds
         self.agents: dict[str, dict] = {}
 
     async def handle(
-            self,
-            ev: AgentEvent,
-    ) -> dict | None:
-        """Apply a lifecycle or usage event and publish any resulting state and alert.
+        self,
+        ev: AgentEvent,
+        ) -> dict | None:
+        """
+        Apply a lifecycle or usage event and publish any resulting state and alert.
 
         Args:
-            ev: Validated hook event identifying a session and its update.
+            ev (AgentEvent): Validated hook event identifying a session and its update.
 
         Returns:
-            The updated session, or None for removed, ignored, or usage-only events.
+            dict | None: The updated session, or None for removed, ignored, or usage-only events.
 
         Raises:
             ValueError: An explicit state is unknown or the event has no state or type.
@@ -148,15 +170,19 @@ class AgentRegistry:
         return agent
 
     async def _update_usage(
-            self,
-            ev: AgentEvent,
-            now: float,
-    ) -> None:
-        """Publish account usage separately so status-line updates never change tile state.
+        self,
+        ev: AgentEvent,
+        now: float,
+        ) -> None:
+        """
+        Publish account usage separately so status-line updates never change tile state.
 
         Args:
-            ev: Incoming hook or status-line event containing optional usage windows.
-            now: Server receipt time in Unix seconds.
+            ev (AgentEvent): Incoming hook or status-line event containing optional usage windows.
+            now (float): Server receipt time in Unix seconds.
+
+        Returns:
+            None: No value is returned.
         """
         if ev.usage is None or ev.agent not in KINDS:
             return
@@ -164,10 +190,26 @@ class AgentRegistry:
         usage[ev.agent] = {**ev.usage.model_dump(), "updated_at": now}
         await self.hub.update("agent_usage", usage)
 
-    async def _publish(self) -> None:
+    async def _publish(
+        self,
+        ) -> None:
+        """
+        Broadcast the current session registry to all connected displays.
+
+        Returns:
+            None: No value is returned.
+        """
         await self.hub.update("agents", list(self.agents.values()))
 
-    async def prune_forever(self) -> None:
+    async def prune_forever(
+        self,
+        ) -> None:
+        """
+        Periodically remove sessions older than the configured stale interval.
+
+        Returns:
+            None: No value is returned.
+        """
         stale = float(self.cfg.get("stale_hours", 12)) * 3600
         while True:
             await asyncio.sleep(60)
@@ -179,7 +221,18 @@ class AgentRegistry:
                 await self._publish()
 
 
-def _name_from_cwd(cwd: Optional[str]) -> Optional[str]:
+def _name_from_cwd(
+    cwd: Optional[str],
+    ) -> Optional[str]:
+    """
+    Extract a project folder name from a POSIX or Windows working directory.
+
+    Args:
+        cwd (Optional[str]): Session working directory, or None when the hook did not provide one.
+
+    Returns:
+        Optional[str]: Final directory component, or None for an absent or empty working directory.
+    """
     if not cwd:
         return None
     return cwd.replace("\\", "/").rstrip("/").split("/")[-1] or None

@@ -1,5 +1,12 @@
-"""Run piDeck in a native desktop window with an optional loopback-only server."""
+"""
+
+Run piDeck in a native desktop window with an optional loopback-only server.
+
+"""
+
 from __future__ import annotations
+
+from typing import Iterator
 
 import argparse
 from contextlib import contextmanager, nullcontext
@@ -23,24 +30,26 @@ from .main import create_app
 from . import __version__
 
 
-"""# --- Configuration helpers ---"""
+# --- Configuration helpers ---
 
 
 def window_icon() -> str:
-    """Return the raspberry icon used for the desktop window and shortcuts.
+    """
+    Return the raspberry icon used for the desktop window and shortcuts.
 
     Returns:
-        Absolute path to a Windows .ico or a PNG for other platforms.
+        str: Absolute path to a Windows .ico or a PNG for other platforms.
     """
     name = "pideck.ico" if sys.platform == "win32" else "pideck.png"
     return str(Path(__file__).resolve().parent / "assets" / name)
 
 
 def data_directory() -> Path:
-    """Return the platform's per-user piDeck data directory without creating it.
+    """
+    Return the platform's per-user piDeck data directory without creating it.
 
     Returns:
-        A writable user-data path for config, logs, and the persistent webview profile.
+        Path: A writable user-data path for config, logs, and the persistent webview profile.
     """
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "piDeck"
@@ -50,15 +59,16 @@ def data_directory() -> Path:
 
 
 def validate_url(
-        value: str,
-) -> str:
-    """Accept only HTTP(S) piDeck server URLs for the desktop viewer.
+    value: str,
+    ) -> str:
+    """
+    Accept only HTTP(S) piDeck server URLs for the desktop viewer.
 
     Args:
-        value: Address of an existing piDeck server, optionally with its token query.
+        value (str): Address of an existing piDeck server, optionally with its token query.
 
     Returns:
-        The validated address, unchanged so query parameters are preserved.
+        str: The validated address, unchanged so query parameters are preserved.
 
     Raises:
         ValueError: The address is not an HTTP(S) URL with a hostname.
@@ -69,24 +79,30 @@ def validate_url(
     return value
 
 
-"""# --- Local server lifecycle ---"""
+# --- Local server lifecycle ---
 
 
 @contextmanager
 def local_server(
-        config_path: Path,
-        mock: bool = False,
-        port: int | None = None,
-):
-    """Run an owned loopback server and stop it when the desktop window closes.
+    config_path: Path,
+    mock: bool = False,
+    port: int | None = None,
+    ) -> Iterator[str]:
+    """
+    Run an owned loopback server and stop it when the desktop window closes.
 
     Args:
-        config_path: Configuration path; its parent also holds the optional .env file.
-        mock: Whether to use demo data without creating a shared access token.
-        port: Optional port override; zero selects an available port for testing.
+        config_path (Path): Configuration path; its parent also holds the optional .env file.
+        mock (bool): Whether to use demo data without creating a shared access token.
+        port (int | None): Optional port override; zero selects an available port for testing.
+
+    Returns:
+        Iterator[str]: Context generator yielding the loopback server URL and releasing its listener
+            on exit.
 
     Yields:
         The local server URL once startup has completed.
+
 
     Raises:
         OSError: The requested port is unavailable.
@@ -121,16 +137,20 @@ def local_server(
             thread.join(timeout=5)
 
 
-"""# --- Packaged backend self-test ---"""
+# --- Packaged backend self-test ---
 
 
 def self_test(
-        report: Path,
-) -> None:
-    """Verify the desktop backend and UI assets without opening a native window.
+    report: Path,
+    ) -> None:
+    """
+    Verify the desktop backend and UI assets without opening a native window.
 
     Args:
-        report: Destination for a JSON success report used by automated checks.
+        report (Path): Destination for a JSON success report used by automated checks.
+
+    Returns:
+        None: No value is returned.
 
     Raises:
         ImportError: The optional webview dependency is unavailable.
@@ -159,24 +179,29 @@ def self_test(
                       encoding="utf-8")
 
 
-"""# --- Native window and entry point ---"""
+# --- Native window and entry point ---
 
 
 def run_desktop(
-        config_path: Path | None = None,
-        mock: bool = False,
-        port: int | None = None,
-        url: str | None = None,
-        on_top: bool = False,
-) -> None:
-    """Open a resizable native window on Windows or macOS using the existing piDeck UI.
+    config_path: Path | None = None,
+    mock: bool = False,
+    port: int | None = None,
+    url: str | None = None,
+    on_top: bool = False,
+    ) -> None:
+    """
+    Open a resizable native window on Windows or macOS using the existing piDeck UI.
 
     Args:
-        config_path: Local server config; defaults to the user's piDeck data directory.
-        mock: Whether a locally hosted server should show demo data.
-        port: Local server port override; ignored for an existing server URL.
-        url: Existing piDeck address, or None to start a local server.
-        on_top: Whether to keep the window above other windows.
+        config_path (Path | None): Local server config; defaults to the user's piDeck data
+            directory.
+        mock (bool): Whether a locally hosted server should show demo data.
+        port (int | None): Local server port override; ignored for an existing server URL.
+        url (str | None): Existing piDeck address, or None to start a local server.
+        on_top (bool): Whether to keep the window above other windows.
+
+    Returns:
+        None: No value is returned.
 
     Raises:
         RuntimeError: The optional desktop dependency is missing or startup fails.
@@ -200,15 +225,16 @@ def run_desktop(
 
 
 def main(
-        argv: list[str] | None = None,
-) -> int:
-    """Parse desktop options and open the window, recording startup errors for GUI launches.
+    argv: list[str] | None = None,
+    ) -> int:
+    """
+    Parse desktop options and open the window, recording startup errors for GUI launches.
 
     Args:
-        argv: Command-line arguments, or None to use sys.argv.
+        argv (list[str] | None): Command-line arguments, or None to use sys.argv.
 
     Returns:
-        Zero after the window closes, or one if startup failed.
+        int: Zero after the window closes, or one if startup failed.
     """
     parser = argparse.ArgumentParser(description="Open piDeck in a small desktop window.")
     parser.add_argument("--config", type=Path, help="local config.yaml path")

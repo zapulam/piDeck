@@ -1,4 +1,9 @@
-"""Config loading: config.yaml merged over defaults; secrets come from the environment (.env)."""
+"""
+
+Config loading: config.yaml merged over defaults; secrets come from the environment (.env).
+
+"""
+
 from __future__ import annotations
 
 import copy
@@ -9,6 +14,8 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
+
+# --- Configuration defaults and merging ---
 
 DEFAULTS: dict[str, Any] = {
     "server": {"host": "0.0.0.0", "port": 8765},
@@ -34,7 +41,21 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
-def _merge(base: dict, over: dict) -> dict:
+def _merge(
+    base: dict,
+    over: dict,
+    ) -> dict:
+    """
+    Recursively merge supplied configuration values over a copied default mapping.
+
+    Args:
+        base (dict): Default configuration values copied before merging overrides.
+        over (dict): Configuration overrides merged recursively into the defaults.
+
+    Returns:
+        dict: A new configuration dictionary containing recursive overrides without mutating the
+            defaults.
+    """
     out = copy.deepcopy(base)
     for k, v in (over or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
@@ -47,20 +68,21 @@ def _merge(base: dict, over: dict) -> dict:
 PAGES = ("agents", "now_playing", "slack")
 
 
-"""# --- Saved page selection ---"""
+# --- Saved page selection ---
 
 
 def ui_settings_path(
-        config_path: Path,
-) -> Path:
-    """Return the gitignored page-selection file that belongs with a config.
+    config_path: Path,
+    ) -> Path:
+    """
+    Return the gitignored page-selection file that belongs with a config.
 
     Args:
-        config_path: The config.yaml this server was started with.
+        config_path (Path): The config.yaml this server was started with.
 
     Returns:
-        ui-settings.json beside that config, or in the working directory when
-        the config directory does not exist.
+        Path: ui-settings.json beside that config, or in the working directory when the config
+            directory does not exist.
     """
     parent = Path(config_path).expanduser().resolve().parent
     if not parent.is_dir():
@@ -69,17 +91,18 @@ def ui_settings_path(
 
 
 def load_saved_views(
-        config_path: Path,
-        default: list[str],
-) -> list[str]:
-    """Return the pages to show, preferring the gitignored selection file.
+    config_path: Path,
+    default: list[str],
+    ) -> list[str]:
+    """
+    Return the pages to show, preferring the gitignored selection file.
 
     Args:
-        config_path: The config.yaml this server was started with.
-        default: Page ids from config.yaml, used when no selection has been saved.
+        config_path (Path): The config.yaml this server was started with.
+        default (list[str]): Page ids from config.yaml, used when no selection has been saved.
 
     Returns:
-        Known page ids in display order. Settings is not included; the UI always adds it.
+        list[str]: Known page ids in display order. Settings is not included; the UI always adds it.
     """
     fallback = [page for page in PAGES if page in default]
     path = ui_settings_path(config_path)
@@ -95,17 +118,18 @@ def load_saved_views(
 
 
 def save_views(
-        config_path: Path,
-        views: list[str],
-) -> list[str]:
-    """Write the selected pages to the gitignored selection file.
+    config_path: Path,
+    views: list[str],
+    ) -> list[str]:
+    """
+    Write the selected pages to the gitignored selection file.
 
     Args:
-        config_path: The config.yaml this server was started with.
-        views: Requested page ids. Unknown ids are dropped and order is normalized.
+        config_path (Path): The config.yaml this server was started with.
+        views (list[str]): Requested page ids. Unknown ids are dropped and order is normalized.
 
     Returns:
-        The page ids that were saved.
+        list[str]: The page ids that were saved.
     """
     chosen = [page for page in PAGES if page in views]
     path = ui_settings_path(config_path)
@@ -113,7 +137,22 @@ def save_views(
     return chosen
 
 
-def load_config(path: str | os.PathLike | None = None) -> dict[str, Any]:
+# --- Configuration file loading ---
+
+
+def load_config(
+    path: str | os.PathLike | None = None,
+    ) -> dict[str, Any]:
+    """
+    Load YAML configuration and adjacent environment values over application defaults.
+
+    Args:
+        path (str | os.PathLike | None): Filesystem path or API path used by this operation.
+
+    Returns:
+        dict[str, Any]: Defaults merged with the supplied YAML file after loading its adjacent .env
+            values.
+    """
     p = Path(path) if path else Path("config.yaml")
     load_dotenv(p.parent / ".env")
     data: dict = {}

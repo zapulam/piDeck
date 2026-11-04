@@ -1,4 +1,6 @@
-"""One-time helper to get a Spotify refresh token.
+"""
+
+One-time helper to get a Spotify refresh token.
 
     python -m pideck.spotify_auth
 
@@ -7,7 +9,9 @@
 2. Run this, open the printed URL, approve, and paste the URL your browser lands on
    (the page itself won't load - that's fine, we only need the ?code=... in the address bar).
 3. Put the printed SPOTIFY_REFRESH_TOKEN in .env.
+
 """
+
 from __future__ import annotations
 
 import base64
@@ -21,7 +25,16 @@ from dotenv import load_dotenv
 from .sources.spotify import SCOPES, TOKEN_URL
 
 
+# --- Local authorization flow ---
+
 def main() -> int:
+    """
+    Run the local Spotify authorization flow and print the resulting refresh token.
+
+    Returns:
+        int: Zero after successful authorization, or one when credentials or an authorization code
+            are missing.
+    """
     load_dotenv()
     cid = os.environ.get("SPOTIFY_CLIENT_ID")
     secret = os.environ.get("SPOTIFY_CLIENT_SECRET")

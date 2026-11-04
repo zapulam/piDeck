@@ -1,4 +1,11 @@
-"""Require human commit identities while allowing AI tool credit trailers."""
+"""
+
+Require human commit identities while allowing AI tool credit trailers.
+
+"""
+
+from __future__ import annotations
+
 import re
 import subprocess
 
@@ -7,19 +14,20 @@ BLOCKED_CREDITS = re.compile(r"\bdependabot\b|\[bot\]", re.IGNORECASE)
 TRAILER = re.compile(r"^(?:Co-authored-by|Signed-off-by):", re.IGNORECASE)
 
 
-"""# --- Attribution validation ---"""
+# --- Attribution validation ---
 
 
 def violations(
-        history: str,
-) -> list[str]:
-    """Reject tool/bot identities and bot credits while allowing human and AI tool credits.
+    history: str,
+    ) -> list[str]:
+    """
+    Reject tool/bot identities and bot credits while allowing human and AI tool credits.
 
     Args:
-        history: NUL-delimited git log records with hash, author, committer, and message.
+        history (str): NUL-delimited git log records with hash, author, committer, and message.
 
     Returns:
-        Descriptions of invalid identities or bot credit trailers, keyed by commit hash.
+        list[str]: Descriptions of invalid identities or bot credit trailers, keyed by commit hash.
     """
     found = []
     for record in history.split("\0\0"):
@@ -34,10 +42,11 @@ def violations(
 
 
 def main() -> int:
-    """Inspect HEAD's complete history and return one if unwanted attribution is present.
+    """
+    Inspect HEAD's complete history and return one if unwanted attribution is present.
 
     Returns:
-        Zero for clean attribution, otherwise one after printing the affected commits.
+        int: Zero for clean attribution, otherwise one after printing the affected commits.
     """
     history = subprocess.check_output([
         "git", "log", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00%x00", "HEAD",

@@ -1,4 +1,13 @@
-"""Desktop server lifecycle and window configuration, independent of native GUI libraries."""
+"""
+
+Desktop server lifecycle and window configuration, independent of native GUI libraries.
+
+"""
+
+from __future__ import annotations
+
+from typing import Any, Iterator
+
 from contextlib import contextmanager
 from pathlib import Path
 import socket
@@ -11,14 +20,22 @@ import pytest
 from pideck import desktop
 
 
-"""# --- URL and data-directory helpers ---"""
+# --- URL and data-directory helpers ---
 
 
 @pytest.mark.parametrize("url", ["file:///tmp/test", "javascript:alert(1)", "https://", "https://user:pass@pi/"])
 def test_desktop_rejects_non_server_urls(
-        url,
-):
-    """Only HTTP(S) server addresses without embedded login credentials are accepted."""
+    url: str,
+    ) -> None:
+    """
+    Only HTTP(S) server addresses without embedded login credentials are accepted.
+
+    Args:
+        url (str): HTTP or HTTPS address of the piDeck display.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     with pytest.raises(ValueError):
         desktop.validate_url(url)
 
@@ -28,12 +45,24 @@ def test_desktop_rejects_non_server_urls(
     ("linux", ".local/share/pideck"),
 ])
 def test_desktop_data_directory_is_per_user(
-        monkeypatch,
-        tmp_path,
-        platform,
-        suffix,
-):
-    """Packaged apps store mutable files under the user profile rather than the app bundle."""
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    platform: str,
+    suffix: str,
+    ) -> None:
+    """
+    Packaged apps store mutable files under the user profile rather than the app bundle.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
+            environment, and paths.
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+        platform (str): Platform identifier used to simulate operating-system behavior.
+        suffix (str): Expected platform-specific directory suffix.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     monkeypatch.setattr(desktop.sys, "platform", platform)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
@@ -41,13 +70,21 @@ def test_desktop_data_directory_is_per_user(
     assert desktop.data_directory() == tmp_path / suffix
 
 
-"""# --- Real local server lifecycle ---"""
+# --- Real local server lifecycle ---
 
 
 def test_desktop_local_server_serves_ui_and_releases_port(
-        tmp_path,
-):
-    """Run the actual backend on loopback, verify assets and auth, then verify shutdown."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    Run the actual backend on loopback, verify assets and auth, then verify shutdown.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     with desktop.local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
         with httpx.Client(base_url=url, trust_env=False) as client:
             assert client.get("api/health").json()["ok"]
@@ -62,9 +99,17 @@ def test_desktop_local_server_serves_ui_and_releases_port(
 
 
 def test_desktop_reports_port_conflicts(
-        tmp_path,
-):
-    """An occupied port is reported rather than silently opening an unrelated server."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    An occupied port is reported rather than silently opening an unrelated server.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -73,14 +118,24 @@ def test_desktop_reports_port_conflicts(
                 pytest.fail("An occupied port should not start")
 
 
-"""# --- Native-window orchestration ---"""
+# --- Native-window orchestration ---
 
 
 def test_desktop_remote_window_does_not_start_a_server(
-        monkeypatch,
-        tmp_path,
-):
-    """Remote viewer mode preserves authentication queries and starts only the native window."""
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ) -> None:
+    """
+    Remote viewer mode preserves authentication queries and starts only the native window.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
+            environment, and paths.
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     calls = []
     fake = SimpleNamespace(create_window=lambda *args, **kwargs: calls.append((args, kwargs)),
                            start=lambda **kwargs: calls.append(kwargs))
@@ -88,10 +143,21 @@ def test_desktop_remote_window_does_not_start_a_server(
     monkeypatch.setattr(desktop, "data_directory", lambda: tmp_path)
 
     def unexpected_server(
-            *args,
-            **kwargs,
-    ):
-        """Fail if viewer mode attempts to create a backend."""
+        *args: Any,
+        **kwargs: Any,
+        ) -> None:
+        """
+        Fail if viewer mode attempts to create a backend.
+
+        Args:
+            *args (Any): Additional arguments accepted by this callback or forwarded to the wrapped
+                operation.
+            **kwargs (Any): Additional arguments accepted by this callback or forwarded to the
+                wrapped operation.
+
+        Returns:
+            None: Assertions or fixture setup completed successfully.
+        """
         pytest.fail("Viewer mode must not start a backend")
 
     monkeypatch.setattr(desktop, "local_server", unexpected_server)
@@ -106,10 +172,20 @@ def test_desktop_remote_window_does_not_start_a_server(
 
 
 def test_desktop_cli_uses_repo_config_and_env(
-        monkeypatch,
-        tmp_path,
-):
-    """Launching from a checkout uses that folder's config.yaml, which loads the repo .env."""
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ) -> None:
+    """
+    Launching from a checkout uses that folder's config.yaml, which loads the repo .env.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
+            environment, and paths.
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     seen = {}
     (tmp_path / "config.yaml").write_text("server:\n  port: 8765\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -124,18 +200,40 @@ def test_desktop_cli_uses_repo_config_and_env(
 
 
 def test_desktop_closes_owned_server_when_window_start_fails(
-        monkeypatch,
-        tmp_path,
-):
-    """A failed native renderer must still close the local backend context."""
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ) -> None:
+    """
+    A failed native renderer must still close the local backend context.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
+            environment, and paths.
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     lifecycle = []
 
     @contextmanager
     def server(
-            *args,
-            **kwargs,
-    ):
-        """Record entry and cleanup of the owned backend context."""
+        *args: Any,
+        **kwargs: Any,
+        ) -> Iterator[str]:
+        """
+        Record entry and cleanup of the owned backend context.
+
+        Args:
+            *args (Any): Additional arguments accepted by this callback or forwarded to the wrapped
+                operation.
+            **kwargs (Any): Additional arguments accepted by this callback or forwarded to the
+                wrapped operation.
+
+        Returns:
+            Iterator[str]: Iterator providing the documented values for the lifetime of this
+                operation.
+        """
         lifecycle.append("start")
         try:
             yield "http://127.0.0.1:8765/"
@@ -143,10 +241,21 @@ def test_desktop_closes_owned_server_when_window_start_fails(
             lifecycle.append("stop")
 
     def failed_window(
-            *args,
-            **kwargs,
-    ):
-        """Simulate a native renderer failure before its event loop starts."""
+        *args: Any,
+        **kwargs: Any,
+        ) -> None:
+        """
+        Simulate a native renderer failure before its event loop starts.
+
+        Args:
+            *args (Any): Additional arguments accepted by this callback or forwarded to the wrapped
+                operation.
+            **kwargs (Any): Additional arguments accepted by this callback or forwarded to the
+                wrapped operation.
+
+        Returns:
+            None: Assertions or fixture setup completed successfully.
+        """
         raise RuntimeError("Renderer unavailable")
 
     monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(create_window=failed_window))

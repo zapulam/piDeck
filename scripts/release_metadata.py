@@ -1,4 +1,11 @@
-"""Validate version tags and write SHA-256 checksums for release archives."""
+"""
+
+Validate version tags and write SHA-256 checksums for release archives.
+
+"""
+
+from __future__ import annotations
+
 import argparse
 import ast
 import hashlib
@@ -10,19 +17,20 @@ ROOT = Path(__file__).resolve().parent.parent
 TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?")
 
 
-"""# --- Version and artifact helpers ---"""
+# --- Version and artifact helpers ---
 
 
 def project_version(
-        root: Path = ROOT,
-) -> str:
-    """Read the literal package version without importing the application.
+    root: Path = ROOT,
+    ) -> str:
+    """
+    Read the literal package version without importing the application.
 
     Args:
-        root: Repository directory containing pideck/__init__.py.
+        root (Path): Repository directory containing pideck/__init__.py.
 
     Returns:
-        The package's declared version string.
+        str: The package's declared version string.
 
     Raises:
         ValueError: No literal string version is declared.
@@ -38,14 +46,18 @@ def project_version(
 
 
 def validate_tag(
-        tag: str,
-        version: str,
-) -> None:
-    """Require a semantic version tag that exactly matches the packaged application.
+    tag: str,
+    version: str,
+    ) -> None:
+    """
+    Require a semantic version tag that exactly matches the packaged application.
 
     Args:
-        tag: Git release tag, including its v prefix.
-        version: Package version declared in pideck/__init__.py.
+        tag (str): Git release tag, including its v prefix.
+        version (str): Package version declared in pideck/__init__.py.
+
+    Returns:
+        None: No value is returned.
 
     Raises:
         ValueError: The tag is malformed or differs from the package version.
@@ -55,15 +67,16 @@ def validate_tag(
 
 
 def write_checksums(
-        directory: Path,
-) -> Path:
-    """Write a sorted checksum manifest covering every release ZIP in a directory.
+    directory: Path,
+    ) -> Path:
+    """
+    Write a sorted checksum manifest covering every release ZIP in a directory.
 
     Args:
-        directory: Folder containing the source release archive.
+        directory (Path): Folder containing the source release archive.
 
     Returns:
-        The path to the generated SHA256SUMS manifest.
+        Path: The path to the generated SHA256SUMS manifest.
 
     Raises:
         ValueError: No release archives are present.
@@ -81,11 +94,16 @@ def write_checksums(
     return manifest
 
 
-"""# --- Command entry point ---"""
+# --- Command entry point ---
 
 
 def main() -> None:
-    """Validate a checked-out release tag or generate checksums for prepared assets."""
+    """
+    Validate a checked-out release tag or generate checksums for prepared assets.
+
+    Returns:
+        None: No value is returned.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")

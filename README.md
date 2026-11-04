@@ -192,9 +192,12 @@ pip install -r requirements-dev.txt
 pytest -m "not browser"
 python -m playwright install chromium
 pytest -m browser
+python scripts/check_python_style.py
 ```
 
-CI runs tests on Linux, Windows, and Intel macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. macOS 26 uses the Intel runner pool because GitHub's ARM pool has been cancelling jobs before any test starts. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The stable required check is **CI passed**, which succeeds only after every validation job passes.
+CI runs tests on Linux, Windows, and Intel macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. macOS 26 uses the Intel runner pool because GitHub's ARM pool has been cancelling jobs before any test starts. It also checks Python/JavaScript syntax, Python documentation and formatting conventions, workflow validity, commit attribution, and dependency vulnerabilities. The stable required check is **CI passed**, which succeeds only after every validation job passes.
+
+Python files start with a descriptive module docstring surrounded by blank lines inside the quotes, use `# --- Group ---` section comments, and end with exactly one LF newline. Function parameters and their closing parenthesis use one additional four-space indentation level on separate lines. Functions have type annotations and full docstrings describing their behavior, typed arguments, and typed returns, including `None`. See [AGENTS.md](AGENTS.md) for the complete conventions; the style checker, EditorConfig, and Git attributes keep them consistent across platforms.
 
 Regenerate the README walkthrough from isolated mock data with `pip install Pillow` and `python scripts/record_demo.py` after installing the development dependencies and Playwright Chromium above. The recorder uses the real UI and does not read account credentials or session transcripts.
 

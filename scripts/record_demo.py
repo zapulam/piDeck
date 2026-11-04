@@ -1,10 +1,16 @@
-"""Record the README walkthrough using isolated mock data and the actual browser UI.
+"""
+
+Record the README walkthrough using isolated mock data and the actual browser UI.
 
 Install requirements-dev.txt, Pillow, and Playwright Chromium, then run:
     python scripts/record_demo.py
 No real accounts, user settings, session transcripts, or desktop profile are used.
+
 """
+
 from __future__ import annotations
+
+from playwright.sync_api import Page
 
 import argparse
 from io import BytesIO
@@ -21,43 +27,54 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pideck.hub import Hub
+from pideck.sources.agents import AgentRegistry
+from pideck.sources.slack import SlackFeed
 from pideck.desktop import local_server
 from pideck.sources import mock
 
 WIDTH, HEIGHT, FPS = 800, 480, 10
 
 
-"""# --- Mock source and recording helpers ---"""
+# --- Mock source and recording helpers ---
 
 
 async def seed_demo(
-        hub,
-        agents,
-        feed,
-        lively=True,
-):
-    """Seed stable demo data without background events interrupting the recording.
+    hub: Hub,
+    agents: AgentRegistry,
+    feed: SlackFeed,
+    lively: bool = True,
+    ) -> None:
+    """
+    Seed stable demo data without background events interrupting the recording.
 
     Args:
-        hub: Temporary server's state and websocket hub.
-        agents: Temporary session registry.
-        feed: Temporary Slack feed.
-        lively: Unused compatibility argument accepted by the normal demo runner.
+        hub (Hub): Temporary server's state and websocket hub.
+        agents (AgentRegistry): Temporary session registry.
+        feed (SlackFeed): Temporary Slack feed.
+        lively (bool): Unused compatibility argument accepted by the normal demo runner.
+
+    Returns:
+        None: No value is returned.
     """
     await mock.seed(hub, agents, feed)
 
 
 def capture(
-        page,
-        frames,
-        seconds,
-):
-    """Capture a scene at up to ten frames per second, retaining its actual timing.
+    page: Page,
+    frames: list[tuple[float, Image.Image]],
+    seconds: float,
+    ) -> None:
+    """
+    Capture a scene at up to ten frames per second, retaining its actual timing.
 
     Args:
-        page: Isolated Playwright page displaying the application.
-        frames: Mutable sequence of timestamp and RGB image pairs.
-        seconds: Minimum scene duration in seconds.
+        page (Page): Isolated Playwright page displaying the application.
+        frames (list[tuple[float, Image.Image]]): Mutable sequence of timestamp and RGB image pairs.
+        seconds (float): Minimum scene duration in seconds.
+
+    Returns:
+        None: No value is returned.
     """
     end = time.monotonic() + seconds
     while time.monotonic() < end:
@@ -68,14 +85,19 @@ def capture(
 
 
 def encode_gif(
-        frames,
-        destination,
-):
-    """Encode captured frames with a shared palette and verify the resulting GIF.
+    frames: list[tuple[float, Image.Image]],
+    destination: Path,
+    ) -> None:
+    """
+    Encode captured frames with a shared palette and verify the resulting GIF.
 
     Args:
-        frames: Timestamp and RGB image pairs from the browser recording.
-        destination: Output GIF path, normally docs/demo.gif.
+        frames (list[tuple[float, Image.Image]]): Timestamp and RGB image pairs from the browser
+            recording.
+        destination (Path): Output GIF path, normally docs/demo.gif.
+
+    Returns:
+        None: No value is returned.
 
     Raises:
         ValueError: The recording is empty, invalid, or too large for the README.
@@ -101,16 +123,20 @@ def encode_gif(
                           "seconds": duration / 1000, "bytes": destination.stat().st_size}))
 
 
-"""# --- Walkthrough scenes ---"""
+# --- Walkthrough scenes ---
 
 
 def record(
-        destination,
-):
-    """Record agents, a completed turn, Spotify, and Slack without opening Settings.
+    destination: Path,
+    ) -> None:
+    """
+    Record agents, a completed turn, Spotify, and Slack without opening Settings.
 
     Args:
-        destination: GIF output path.
+        destination (Path): GIF output path.
+
+    Returns:
+        None: No value is returned.
 
     Raises:
         AssertionError: A browser error occurs or a demonstrated feature is missing.
@@ -172,11 +198,16 @@ def record(
     encode_gif(frames, destination)
 
 
-"""# --- Command entry point ---"""
+# --- Command entry point ---
 
 
-def main():
-    """Parse an optional output path and record the README demo."""
+def main() -> None:
+    """
+    Parse an optional output path and record the README demo.
+
+    Returns:
+        None: No value is returned.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "docs/demo.gif")
     record(parser.parse_args().output)

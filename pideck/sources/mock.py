@@ -1,7 +1,11 @@
-"""Fake data so the whole UI can be developed and demoed without any accounts.
+"""
+
+Fake data so the whole UI can be developed and demoed without any accounts.
 
 Run with `python -m pideck --mock` (or `mock: true` in config.yaml).
+
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +15,8 @@ import time
 from ..hub import Hub
 from .agents import AgentEvent, AgentRegistry
 from .slack import SlackFeed
+
+# --- Demo fixtures ---
 
 TRACKS = [
     ("Silver Lining", "Mt. Joy", "Mt. Joy", 213_000, "#f4a259", "#5b3a29"),
@@ -31,7 +37,23 @@ SLACK = [
 ]
 
 
-def _art(c1: str, c2: str) -> str:
+# --- Generated artwork ---
+
+
+def _art(
+    c1: str,
+    c2: str,
+    ) -> str:
+    """
+    Build a generated gradient album-art SVG as a data URL.
+
+    Args:
+        c1 (str): First hex color in the generated artwork gradient.
+        c2 (str): Second hex color in the generated artwork gradient.
+
+    Returns:
+        str: URL-encoded SVG data URL containing the generated gradient album artwork.
+    """
     svg = (
         f"<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'>"
         f"<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
@@ -45,8 +67,25 @@ def _art(c1: str, c2: str) -> str:
     return "data:image/svg+xml;utf8," + quote(svg)
 
 
-async def seed(hub: Hub, agents: AgentRegistry, slack: SlackFeed) -> None:
-    """A static, screenshot-friendly starting point."""
+# --- Mock source updates ---
+
+
+async def seed(
+    hub: Hub,
+    agents: AgentRegistry,
+    slack: SlackFeed,
+    ) -> None:
+    """
+    A static, screenshot-friendly starting point.
+
+    Args:
+        hub (Hub): Shared hub used to publish source state and display alerts.
+        agents (AgentRegistry): Registry receiving the demo session lifecycle updates.
+        slack (SlackFeed): Feed receiving generated demo Slack messages.
+
+    Returns:
+        None: No value is returned.
+    """
     now = time.time()
     states = ["working", "waiting", "working", "done", "done", "idle", "done", "working",
               "done", "done", "idle", "done"]
@@ -71,7 +110,24 @@ async def seed(hub: Hub, agents: AgentRegistry, slack: SlackFeed) -> None:
         await slack.push(kind=kind, user=user, channel=chan, text=text, ts=now - random.random() * 900)
 
 
-async def run(hub: Hub, agents: AgentRegistry, slack: SlackFeed, lively: bool = True) -> None:
+async def run(
+    hub: Hub,
+    agents: AgentRegistry,
+    slack: SlackFeed,
+    lively: bool = True,
+    ) -> None:
+    """
+    Seed the demo and optionally emit changing agent, music, and Slack events.
+
+    Args:
+        hub (Hub): Shared hub used to publish source state and display alerts.
+        agents (AgentRegistry): Registry receiving the demo session lifecycle updates.
+        slack (SlackFeed): Feed receiving generated demo Slack messages.
+        lively (bool): Whether the demo should continue emitting random changes after startup.
+
+    Returns:
+        None: No value is returned.
+    """
     await seed(hub, agents, slack)
     if not lively:
         return

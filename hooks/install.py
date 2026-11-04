@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""One-command setup for piDeck hooks (Claude Code, Codex, and Cursor). Stdlib only.
+"""
+
+One-command setup for piDeck hooks (Claude Code, Codex, and Cursor). Stdlib only.
 
     python3 hooks/install.py --url http://pideck.local:8765 --token YOUR_TOKEN
 
@@ -12,7 +13,13 @@ What it does, and nothing else:
   4. with --test, makes a test tile appear on the display so you know it works
 
 Run it again any time to update; it never creates duplicates. `--uninstall` removes it all.
+
 """
+
+from __future__ import annotations
+
+from typing import Any
+
 import argparse
 import json
 import os
@@ -24,6 +31,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# --- Hook event configuration ---
+
 MARK = "pideck_hook.py"  # how we recognise our own hook entries
 
 CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SubagentStart", "SubagentStop", "SessionEnd"]
@@ -31,20 +40,55 @@ CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]  # Co
 CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "subagentStart", "subagentStop", "sessionEnd"]
 
 
+# --- Shared configuration helpers ---
+
+
 class InstallError(Exception):
     pass
 
 
-def conf_dir(home: Path) -> Path:
+def conf_dir(
+    home: Path,
+    ) -> Path:
+    """
+    Locate the piDeck hook settings directory under a user home.
+
+    Args:
+        home (Path): Home directory containing the provider or integration settings.
+
+    Returns:
+        Path: User-owned directory containing hook settings and the installed standalone script.
+    """
     return home / ".config" / "pideck"
 
 
-def _is_ours(hook: dict) -> bool:
+def _is_ours(
+    hook: dict,
+    ) -> bool:
+    """
+    Identify a hook command that was installed by piDeck.
+
+    Args:
+        hook (dict): Lifecycle hook entry to identify as piDeck-owned or unrelated.
+
+    Returns:
+        bool: True when the hook command contains the piDeck script marker.
+    """
     return MARK in str(hook.get("command", ""))
 
 
-def strip_ours(hooks: dict) -> dict:
-    """Return `hooks` (event -> groups) without any piDeck entries; drop groups that become empty."""
+def strip_ours(
+    hooks: dict,
+    ) -> dict:
+    """
+    Return `hooks` (event -> groups) without any piDeck entries; drop groups that become empty.
+
+    Args:
+        hooks (dict): Provider hook groups keyed by lifecycle event name.
+
+    Returns:
+        dict: Provider hook groups with piDeck-owned entries and newly empty groups removed.
+    """
     out = {}
     for event, groups in (hooks or {}).items():
         kept = []
@@ -59,12 +103,36 @@ def strip_ours(hooks: dict) -> dict:
     return out
 
 
-def command_for(script: Path, source: str) -> str:
+def command_for(
+    script: Path,
+    source: str,
+    ) -> str:
+    """
+    Build a quoted Python command for the installed hook and provider.
+
+    Args:
+        script (Path): Standalone piDeck hook script to invoke or copy.
+        source (str): Provider identifier, normally claude, codex, or cursor.
+
+    Returns:
+        str: Quoted Python command with an explicit provider flag for non-Claude hooks.
+    """
     cmd = f'"{sys.executable}" "{script}"'
     return cmd + (f" --source {source}" if source != "claude" else "")
 
 
-def read_json(path: Path) -> dict:
+def read_json(
+    path: Path,
+    ) -> dict:
+    """
+    Read a settings object or return an empty object when the file is absent.
+
+    Args:
+        path (Path): Filesystem path or API path used by this operation.
+
+    Returns:
+        dict: Parsed settings dictionary, or an empty dictionary when the file does not exist.
+    """
     if not path.exists():
         return {}
     try:
@@ -76,8 +144,22 @@ def read_json(path: Path) -> dict:
     return data
 
 
-def write_json(path: Path, data: dict, dry: bool) -> bool:
-    """Write if changed. Returns True if the file changed. Backs up an existing file once."""
+def write_json(
+    path: Path,
+    data: dict,
+    dry: bool,
+    ) -> bool:
+    """
+    Write if changed. Returns True if the file changed. Backs up an existing file once.
+
+    Args:
+        path (Path): Filesystem path or API path used by this operation.
+        data (dict): JSON-compatible settings or provider fields to inspect or write.
+        dry (bool): Whether to report changes without writing any files.
+
+    Returns:
+        bool: True when the settings file changed or would change in dry-run mode.
+    """
     new = json.dumps(data, indent=2) + "\n"
     old = path.read_text() if path.exists() else None
     if old == new:
@@ -93,7 +175,26 @@ def write_json(path: Path, data: dict, dry: bool) -> bool:
     return True
 
 
-def install_target(path: Path, events, script: Path, source: str, dry: bool) -> bool:
+def install_target(
+    path: Path,
+    events: list[str],
+    script: Path,
+    source: str,
+    dry: bool,
+    ) -> bool:
+    """
+    Register piDeck lifecycle hooks without changing unrelated hook entries.
+
+    Args:
+        path (Path): Filesystem path or API path used by this operation.
+        events (list[str]): Lifecycle event names to register for this provider.
+        script (Path): Standalone piDeck hook script to invoke or copy.
+        source (str): Provider identifier, normally claude, codex, or cursor.
+        dry (bool): Whether to report changes without writing any files.
+
+    Returns:
+        bool: True when lifecycle registration changed or would change the settings file.
+    """
     data = read_json(path)
     hooks = strip_ours(data.get("hooks", {}))
     for ev in events:
@@ -105,17 +206,18 @@ def install_target(path: Path, events, script: Path, source: str, dry: bool) -> 
 
 
 def uninstall_target(
-        path: Path,
-        dry: bool,
-) -> bool:
-    """Remove piDeck hooks and restore a wrapped status line without touching other settings.
+    path: Path,
+    dry: bool,
+    ) -> bool:
+    """
+    Remove piDeck hooks and restore a wrapped status line without touching other settings.
 
     Args:
-        path: Claude or Codex settings JSON file to update.
-        dry: Whether to report the change without writing it.
+        path (Path): Claude or Codex settings JSON file to update.
+        dry (bool): Whether to report the change without writing it.
 
     Returns:
-        True when the settings file would change, otherwise False.
+        bool: True when the settings file would change, otherwise False.
     """
     if not path.exists():
         return False
@@ -138,25 +240,26 @@ def uninstall_target(
     return write_json(path, data, dry)
 
 
-"""# --- Claude usage integration ---"""
+# --- Claude usage integration ---
 
 
 def install_statusline(
-        home: Path,
-        path: Path,
-        script: Path,
-        dry: bool,
-) -> bool:
-    """Wrap Claude's status line to forward usage while preserving its current output.
+    home: Path,
+    path: Path,
+    script: Path,
+    dry: bool,
+    ) -> bool:
+    """
+    Wrap Claude's status line to forward usage while preserving its current output.
 
     Args:
-        home: Home directory holding the per-user piDeck settings.
-        path: Claude settings JSON path.
-        script: Installed piDeck hook script path.
-        dry: Whether to report changes without writing files.
+        home (Path): Home directory holding the per-user piDeck settings.
+        path (Path): Claude settings JSON path.
+        script (Path): Installed piDeck hook script path.
+        dry (bool): Whether to report changes without writing files.
 
     Returns:
-        True when the Claude settings would change. Reinstallation is idempotent.
+        bool: True when the Claude settings would change. Reinstallation is idempotent.
     """
     data = read_json(path)
     original = data.get("statusLine")
@@ -180,25 +283,26 @@ def install_statusline(
     return write_json(path, data, dry)
 
 
-"""# --- Cursor hook integration ---"""
+# --- Cursor hook integration ---
 
 
 def update_cursor_hooks(
-        path: Path,
-        script: Path,
-        dry: bool,
-        uninstall: bool = False,
-) -> bool:
-    """Install or remove piDeck's flat Cursor hooks while retaining unrelated entries.
+    path: Path,
+    script: Path,
+    dry: bool,
+    uninstall: bool = False,
+    ) -> bool:
+    """
+    Install or remove piDeck's flat Cursor hooks while retaining unrelated entries.
 
     Args:
-        path: User-level .cursor/hooks.json file.
-        script: Installed hook script path; unused during removal.
-        dry: Whether to report changes without writing settings.
-        uninstall: Whether to remove rather than install piDeck entries.
+        path (Path): User-level .cursor/hooks.json file.
+        script (Path): Installed hook script path; unused during removal.
+        dry (bool): Whether to report changes without writing settings.
+        uninstall (bool): Whether to remove rather than install piDeck entries.
 
     Returns:
-        True when the settings file would change, otherwise False.
+        bool: True when the settings file would change, otherwise False.
 
     Raises:
         InstallError: The existing version or hook structure cannot be safely edited.
@@ -230,10 +334,27 @@ def update_cursor_hooks(
     return write_json(path, data, dry)
 
 
-"""# --- Shared settings and installation ---"""
+# --- Shared settings and installation ---
 
 
-def save_settings(home: Path, url: str, token: str, dry: bool) -> Path:
+def save_settings(
+    home: Path,
+    url: str,
+    token: str,
+    dry: bool,
+    ) -> Path:
+    """
+    Persist the display URL and token while preserving existing hook preferences.
+
+    Args:
+        home (Path): Home directory containing the provider or integration settings.
+        url (str): HTTP or HTTPS address of the piDeck display.
+        token (str): Access token used only for the intended local or provider request.
+        dry (bool): Whether to report changes without writing any files.
+
+    Returns:
+        Path: Path to the saved or proposed hook settings file.
+    """
     d = conf_dir(home)
     f = d / "hook.json"
     if not dry:
@@ -253,7 +374,20 @@ def save_settings(home: Path, url: str, token: str, dry: bool) -> Path:
     return f
 
 
-def copy_script(home: Path, dry: bool) -> Path:
+def copy_script(
+    home: Path,
+    dry: bool,
+    ) -> Path:
+    """
+    Copy the standalone lifecycle hook into the user settings directory.
+
+    Args:
+        home (Path): Home directory containing the provider or integration settings.
+        dry (bool): Whether to report changes without writing any files.
+
+    Returns:
+        Path: Path to the installed or proposed standalone hook script.
+    """
     dest = conf_dir(home) / MARK
     if not dry:
         conf_dir(home).mkdir(parents=True, exist_ok=True)
@@ -261,7 +395,24 @@ def copy_script(home: Path, dry: bool) -> Path:
     return dest
 
 
-def _request(url, token="", method="GET", body=None):
+def _request(
+    url: str,
+    token: str = '',
+    method: str = 'GET',
+    body: dict[str, Any] | None = None,
+    ) -> bytes:
+    """
+    Send an authenticated request to the display and return its response bytes.
+
+    Args:
+        url (str): HTTP or HTTPS address of the piDeck display.
+        token (str): Access token used only for the intended local or provider request.
+        method (str): HTTP method to use for the request.
+        body (dict[str, Any] | None): Validated request body or optional JSON fields to send.
+
+    Returns:
+        bytes: Raw response bytes from the display endpoint.
+    """
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
@@ -269,8 +420,20 @@ def _request(url, token="", method="GET", body=None):
     return urllib.request.urlopen(req, timeout=4).read()
 
 
-def check_server(url: str, token: str) -> None:
-    """Fail early, with a useful message, if the display can't be reached or the token is wrong."""
+def check_server(
+    url: str,
+    token: str,
+    ) -> None:
+    """
+    Fail early, with a useful message, if the display can't be reached or the token is wrong.
+
+    Args:
+        url (str): HTTP or HTTPS address of the piDeck display.
+        token (str): Access token used only for the intended local or provider request.
+
+    Returns:
+        None: No value is returned.
+    """
     try:
         _request(url.rstrip("/") + "/api/health")
     except Exception as e:
@@ -290,7 +453,20 @@ def check_server(url: str, token: str) -> None:
         raise InstallError(f"Couldn't send a test event ({e}).")
 
 
-def run_test(url: str, token: str) -> None:
+def run_test(
+    url: str,
+    token: str,
+    ) -> None:
+    """
+    Post a temporary agent lifecycle event to check display connectivity.
+
+    Args:
+        url (str): HTTP or HTTPS address of the piDeck display.
+        token (str): Access token used only for the intended local or provider request.
+
+    Returns:
+        None: No value is returned.
+    """
     base = url.rstrip("/")
     sid = "pideck-install-test"
     ev = lambda **kw: _request(base + "/api/agents/event", token, "POST", {"session_id": sid, "name": "install test", **kw})
@@ -306,7 +482,21 @@ def run_test(url: str, token: str) -> None:
         pass
 
 
-def main(argv=None, home: Path = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    home: Path | None = None,
+    ) -> int:
+    """
+    Install or remove supported provider integrations using the requested options.
+
+    Args:
+        argv (list[str] | None): Command-line arguments, or None to read the current process
+            arguments.
+        home (Path | None): Home directory containing the provider or integration settings.
+
+    Returns:
+        int: Zero on success or a deliberate no-op, or one when installation validation fails.
+    """
     home = home or Path.home()
     ap = argparse.ArgumentParser(description="Install piDeck hooks for Claude Code, Codex, and Cursor.")
     ap.add_argument("--url", help="piDeck address, e.g. http://pideck.local:8765")

@@ -1,4 +1,11 @@
-"""Render the piDeck raspberry pixel sprite into window-icon files."""
+"""
+
+Render the piDeck raspberry pixel sprite into window-icon files.
+
+"""
+
+from __future__ import annotations
+
 import struct
 import zlib
 from pathlib import Path
@@ -28,19 +35,20 @@ COLORS = {
 }
 
 
-"""# --- Pixel image encoding ---"""
+# --- Pixel image encoding ---
 
 
 def sprite_pixels(
-        size: int,
-) -> bytes:
-    """Scale the 12x12 raspberry onto a square RGBA buffer.
+    size: int,
+    ) -> bytes:
+    """
+    Scale the 12x12 raspberry onto a square RGBA buffer.
 
     Args:
-        size: Output width and height in pixels.
+        size (int): Output width and height in pixels.
 
     Returns:
-        Packed RGBA bytes, row-major.
+        bytes: Packed RGBA bytes, row-major.
     """
     grid = 12
     out = bytearray()
@@ -52,21 +60,31 @@ def sprite_pixels(
 
 
 def png_bytes(
-        size: int,
-) -> bytes:
-    """Encode one nearest-neighbor raspberry PNG.
+    size: int,
+    ) -> bytes:
+    """
+    Encode one nearest-neighbor raspberry PNG.
 
     Args:
-        size: Output width and height in pixels.
+        size (int): Output width and height in pixels.
 
     Returns:
-        A complete PNG file.
+        bytes: A complete PNG file.
     """
     def chunk(
-            tag: bytes,
-            data: bytes,
-    ) -> bytes:
-        """Wrap one PNG chunk with its length and CRC."""
+        tag: bytes,
+        data: bytes,
+        ) -> bytes:
+        """
+        Wrap one PNG chunk with its length and CRC.
+
+        Args:
+            tag (bytes): Four-byte PNG chunk identifier, such as IHDR or IDAT.
+            data (bytes): Binary payload to wrap in the PNG chunk.
+
+        Returns:
+            bytes: Length-prefixed PNG chunk with its identifier, payload, and CRC checksum.
+        """
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
     raw = b"".join(b"\x00" + sprite_pixels(size)[y * size * 4:(y + 1) * size * 4] for y in range(size))
@@ -79,15 +97,16 @@ def png_bytes(
 
 
 def ico_bytes(
-        sizes: tuple[int, ...],
-) -> bytes:
-    """Pack PNG images into a Windows icon.
+    sizes: tuple[int, ...],
+    ) -> bytes:
+    """
+    Pack PNG images into a Windows icon.
 
     Args:
-        sizes: Square icon sizes to embed.
+        sizes (tuple[int, ...]): Square icon sizes to embed.
 
     Returns:
-        A complete .ico file.
+        bytes: A complete .ico file.
     """
     images = [(size, png_bytes(size)) for size in sizes]
     header = struct.pack("<HHH", 0, 1, len(images))
@@ -102,11 +121,16 @@ def ico_bytes(
     return header + entries + payload
 
 
-"""# --- Command entry point ---"""
+# --- Command entry point ---
 
 
 def main() -> None:
-    """Write pideck.png and pideck.ico beside the desktop package."""
+    """
+    Write pideck.png and pideck.ico beside the desktop package.
+
+    Returns:
+        None: No value is returned.
+    """
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "pideck.png").write_bytes(png_bytes(256))
     (OUT / "pideck.ico").write_bytes(ico_bytes((16, 32, 48, 256)))

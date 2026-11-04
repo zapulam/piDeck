@@ -1,4 +1,14 @@
-"""Chromium checks for the real UI, websocket data, and responsive desktop layouts."""
+"""
+
+Chromium checks for the real UI, websocket data, and responsive desktop layouts.
+
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+from playwright.sync_api import Page
+
 from pathlib import Path
 
 import httpx
@@ -9,39 +19,48 @@ from pideck.desktop import local_server
 pytestmark = pytest.mark.browser
 
 
-"""# --- Browser fixtures ---"""
+# --- Browser fixtures ---
 
 
 @pytest.fixture(autouse=True)
 def static_demo(
-        monkeypatch,
-):
-    """Seed demo sessions without random background events during browser assertions.
+    monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+    """
+    Seed demo sessions without random background events during browser assertions.
 
     Args:
-        monkeypatch: Pytest helper that restores the demo runner after each test.
+        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores the demo runner after each
+            test.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from pideck.sources import mock
 
     monkeypatch.setattr(mock, "run", lambda hub, agents, slack, lively=True: mock.seed(hub, agents, slack))
 
 
-"""# --- Pointer interaction helpers ---"""
+# --- Pointer interaction helpers ---
 
 
 def drag_usage_panel(
-        page,
-        edge,
-        rotate=0,
-        on_drag=None,
-):
-    """Drag the usage grip to a visible screen edge and check its highlighted target.
+    page: Page,
+    edge: str,
+    rotate: int = 0,
+    on_drag: Callable[[], Any] | None = None,
+    ) -> None:
+    """
+    Drag the usage grip to a visible screen edge and check its highlighted target.
 
     Args:
-        page: Browser page showing the Agents view.
-        edge: Desired logical docking edge.
-        rotate: Software screen rotation used by this test, either zero or 90.
-        on_drag: Optional callback invoked while the pointer is captured.
+        page (Page): Browser page showing the Agents view.
+        edge (str): Desired logical docking edge.
+        rotate (int): Software screen rotation used by this test, either zero or 90.
+        on_drag (Callable[[], Any] | None): Optional callback invoked while the pointer is captured.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     grip = page.locator(".usage-grab")
     grip.scroll_into_view_if_needed()
@@ -66,21 +85,25 @@ def drag_usage_panel(
     page.mouse.up()
 
 
-"""# --- Browser integration ---"""
+# --- Browser integration ---
 
 
 @pytest.mark.parametrize("width,height", [(800, 480), (1280, 720), (520, 720), (360, 400)])
 def test_agents_usage_and_cursor_snapshots_in_chromium(
-        tmp_path,
-        width,
-        height,
-):
-    """Render websocket snapshots and context updates at Pi and desktop window sizes.
+    tmp_path: Path,
+    width: int,
+    height: int,
+    ) -> None:
+    """
+    Render websocket snapshots and context updates at Pi and desktop window sizes.
 
     Args:
-        tmp_path: Isolated directory for server configuration.
-        width: Browser viewport width in pixels.
-        height: Browser viewport height in pixels.
+        tmp_path (Path): Isolated directory for server configuration.
+        width (int): Browser viewport width in pixels.
+        height (int): Browser viewport height in pixels.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import sync_playwright
 
@@ -184,12 +207,16 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
 
 
 def test_random_sprite_motion_in_chromium(
-        tmp_path,
-):
-    """Check independent motion clocks, rendered faces, and intermittent thought bubbles.
+    tmp_path: Path,
+    ) -> None:
+    """
+    Check independent motion clocks, rendered faces, and intermittent thought bubbles.
 
     Args:
-        tmp_path: Isolated directory for server configuration.
+        tmp_path (Path): Isolated directory for server configuration.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import sync_playwright
 
@@ -256,12 +283,16 @@ def test_random_sprite_motion_in_chromium(
 
 
 def test_completion_queue_and_same_name_sessions_in_chromium(
-        tmp_path,
-):
-    """Keep completion sprites and markers distinct and expire queued takeovers.
+    tmp_path: Path,
+    ) -> None:
+    """
+    Keep completion sprites and markers distinct and expire queued takeovers.
 
     Args:
-        tmp_path: Isolated directory for server configuration.
+        tmp_path (Path): Isolated directory for server configuration.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import sync_playwright
 
@@ -302,23 +333,27 @@ def test_completion_queue_and_same_name_sessions_in_chromium(
                 browser.close()
 
 
-"""# --- Custom agent layouts and compact usage ---"""
+# --- Custom agent layouts and compact usage ---
 
 
 @pytest.mark.parametrize("width,height,rotate", [(800, 480, 0), (360, 400, 0), (800, 480, 90)])
 def test_usage_panel_dragging_and_persistence(
-        tmp_path,
-        width,
-        height,
-        rotate,
-):
-    """Dock on each edge with real pointer gestures, including a rotated display.
+    tmp_path: Path,
+    width: int,
+    height: int,
+    rotate: int,
+    ) -> None:
+    """
+    Dock on each edge with real pointer gestures, including a rotated display.
 
     Args:
-        tmp_path: Isolated server configuration directory.
-        width: Browser viewport width.
-        height: Browser viewport height.
-        rotate: Software stage rotation in degrees.
+        tmp_path (Path): Isolated server configuration directory.
+        width (int): Browser viewport width.
+        height (int): Browser viewport height.
+        rotate (int): Software stage rotation in degrees.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import expect, sync_playwright
 
@@ -364,12 +399,16 @@ def test_usage_panel_dragging_and_persistence(
 
 
 def test_provider_group_dragging_and_keyboard_order(
-        tmp_path,
-):
-    """Move an offscreen group to the top, persist it, and support keyboard/cancel.
+    tmp_path: Path,
+    ) -> None:
+    """
+    Move an offscreen group to the top, persist it, and support keyboard/cancel.
 
     Args:
-        tmp_path: Isolated server configuration directory.
+        tmp_path (Path): Isolated server configuration directory.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import sync_playwright
 
@@ -411,12 +450,16 @@ def test_provider_group_dragging_and_keyboard_order(
 
 
 def test_usage_panel_touch_drag_and_keyboard_docking(
-        tmp_path,
-):
-    """Use a real touch gesture to dock usage without swiping to another page.
+    tmp_path: Path,
+    ) -> None:
+    """
+    Use a real touch gesture to dock usage without swiping to another page.
 
     Args:
-        tmp_path: Isolated server configuration directory.
+        tmp_path (Path): Isolated server configuration directory.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import expect, sync_playwright
 
@@ -451,12 +494,16 @@ def test_usage_panel_touch_drag_and_keyboard_docking(
 
 
 def test_usage_donut_thresholds_and_unknown_values(
-        tmp_path,
-):
-    """Color percentages at 70/90 boundaries and distinguish unavailable from zero.
+    tmp_path: Path,
+    ) -> None:
+    """
+    Color percentages at 70/90 boundaries and distinguish unavailable from zero.
 
     Args:
-        tmp_path: Isolated server configuration directory.
+        tmp_path (Path): Isolated server configuration directory.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import expect, sync_playwright
 
@@ -490,12 +537,16 @@ def test_usage_donut_thresholds_and_unknown_values(
 
 
 def test_settings_page_is_always_available(
-        tmp_path,
-):
-    """Keep the full Settings page accessible when every other page is switched off.
+    tmp_path: Path,
+    ) -> None:
+    """
+    Keep the full Settings page accessible when every other page is switched off.
 
     Args:
-        tmp_path: Isolated server configuration directory.
+        tmp_path (Path): Isolated server configuration directory.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
     """
     from playwright.sync_api import expect, sync_playwright
 

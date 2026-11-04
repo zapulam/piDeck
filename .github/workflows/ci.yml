@@ -72,6 +72,7 @@ jobs:
           node-version: "24"
       - run: python -m pip install ruff==0.17.3
       - run: python -m ruff check --select E9,F63,F7,F82 .
+      - run: python scripts/check_python_style.py
       - run: node --check pideck/ui/app.js
       - run: node --check pideck/ui/creature.js
       - run: python scripts/check_attribution.py

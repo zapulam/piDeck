@@ -1,4 +1,13 @@
-"""Startup discovery of local sessions and Cursor allowance parsing."""
+"""
+
+Startup discovery of local sessions and Cursor allowance parsing.
+
+"""
+
+from __future__ import annotations
+
+from typing import Any, Self
+
 import json
 import sqlite3
 import sys
@@ -10,13 +19,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 import pideck_hook as hook
 
 
-"""# --- Local session discovery ---"""
+# --- Local session discovery ---
 
 
 def test_discover_sessions_uses_project_names_and_skips_old_files(
-        tmp_path,
-):
-    """Recent Claude, Codex, and Cursor files become tiles. Their text does not."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    Recent Claude, Codex, and Cursor files become tiles. Their text does not.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     now = time.time()
     claude = tmp_path / ".claude" / "projects" / "C--work-demo"
     claude.mkdir(parents=True)
@@ -58,9 +75,17 @@ def test_discover_sessions_uses_project_names_and_skips_old_files(
 
 
 def test_cursor_usage_posts_percents_and_not_the_token(
-        tmp_path,
-):
-    """The local sign-in is used for the request and is absent from the event."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    The local sign-in is used for the request and is absent from the event.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     db = tmp_path / "state.vscdb"
     conn = sqlite3.connect(db)
     conn.execute("create table ItemTable (key text primary key, value text)")
@@ -69,21 +94,64 @@ def test_cursor_usage_posts_percents_and_not_the_token(
     conn.close()
     seen = {}
 
-    def opener(request, timeout):
+    def opener(
+        request: urllib.request.Request,
+        timeout: float,
+        ) -> Any:
+        """
+        Return a simulated provider response and record the outgoing request.
+
+        Args:
+            request (urllib.request.Request): Incoming request or outgoing provider request used by
+                this operation.
+            timeout (float): Maximum duration allowed for the simulated HTTP operation.
+
+        Returns:
+            Any: The provider value or response object described above.
+        """
         seen["auth"] = request.get_header("Authorization")
         seen["timeout"] = timeout
 
         class Response:
-            def read(self):
+            def read(
+                self,
+                ) -> bytes:
+                """
+                Encode the simulated provider response as JSON bytes.
+
+                Returns:
+                    bytes: Encoded response or image bytes produced by this operation.
+                """
                 return json.dumps({
                     "planUsage": {"totalPercentUsed": 40, "apiPercentUsed": 5},
                     "billingCycleEnd": 2_000_000_000,
                 }).encode()
 
-            def __enter__(self):
+            def __enter__(
+                self,
+                ) -> Self:
+                """
+                Enter the simulated HTTP response context.
+
+                Returns:
+                    Self: This context-managed response instance.
+                """
                 return self
 
-            def __exit__(self, *args):
+            def __exit__(
+                self,
+                *args: Any,
+                ) -> bool:
+                """
+                Leave the simulated HTTP response context without suppressing exceptions.
+
+                Args:
+                    *args (Any): Additional arguments accepted by this callback or forwarded to the
+                        wrapped operation.
+
+                Returns:
+                    bool: True when the documented condition holds; otherwise False.
+                """
                 return False
 
         return Response()
@@ -114,9 +182,17 @@ def test_cursor_usage_posts_percents_and_not_the_token(
 
 
 def test_cursor_usage_refreshes_an_expired_access_token(
-        tmp_path,
-):
-    """A rejected access token is refreshed once, and neither token is posted."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    A rejected access token is refreshed once, and neither token is posted.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     db = tmp_path / "state.vscdb"
     conn = sqlite3.connect(db)
     conn.execute("create table ItemTable (key text primary key, value text)")
@@ -126,19 +202,62 @@ def test_cursor_usage_refreshes_an_expired_access_token(
     conn.close()
     calls = []
 
-    def opener(request, timeout):
+    def opener(
+        request: urllib.request.Request,
+        timeout: float,
+        ) -> Any:
+        """
+        Return a simulated provider response and record the outgoing request.
+
+        Args:
+            request (urllib.request.Request): Incoming request or outgoing provider request used by
+                this operation.
+            timeout (float): Maximum duration allowed for the simulated HTTP operation.
+
+        Returns:
+            Any: The provider value or response object described above.
+        """
         calls.append(request.full_url)
         assert timeout == 5
         if request.full_url.endswith("/oauth/token"):
 
             class Refresh:
-                def read(self):
+                def read(
+                    self,
+                    ) -> bytes:
+                    """
+                    Encode the simulated provider response as JSON bytes.
+
+                    Returns:
+                        bytes: Encoded response or image bytes produced by this operation.
+                    """
                     return json.dumps({"access_token": "fresh-token", "shouldLogout": False}).encode()
 
-                def __enter__(self):
+                def __enter__(
+                    self,
+                    ) -> Self:
+                    """
+                    Enter the simulated HTTP response context.
+
+                    Returns:
+                        Self: This context-managed response instance.
+                    """
                     return self
 
-                def __exit__(self, *args):
+                def __exit__(
+                    self,
+                    *args: Any,
+                    ) -> bool:
+                    """
+                    Leave the simulated HTTP response context without suppressing exceptions.
+
+                    Args:
+                        *args (Any): Additional arguments accepted by this callback or forwarded to
+                            the wrapped operation.
+
+                    Returns:
+                        bool: True when the documented condition holds; otherwise False.
+                    """
                     return False
 
             return Refresh()
@@ -146,16 +265,45 @@ def test_cursor_usage_refreshes_an_expired_access_token(
             raise urllib.error.HTTPError(request.full_url, 401, "expired", None, None)
 
         class Response:
-            def read(self):
+            def read(
+                self,
+                ) -> bytes:
+                """
+                Encode the simulated provider response as JSON bytes.
+
+                Returns:
+                    bytes: Encoded response or image bytes produced by this operation.
+                """
                 return json.dumps({
                     "planUsage": {"includedSpend": 10, "limit": 100, "apiPercentUsed": 2},
                     "billingCycleEnd": 2_000_000_000,
                 }).encode()
 
-            def __enter__(self):
+            def __enter__(
+                self,
+                ) -> Self:
+                """
+                Enter the simulated HTTP response context.
+
+                Returns:
+                    Self: This context-managed response instance.
+                """
                 return self
 
-            def __exit__(self, *args):
+            def __exit__(
+                self,
+                *args: Any,
+                ) -> bool:
+                """
+                Leave the simulated HTTP response context without suppressing exceptions.
+
+                Args:
+                    *args (Any): Additional arguments accepted by this callback or forwarded to the
+                        wrapped operation.
+
+                Returns:
+                    bool: True when the documented condition holds; otherwise False.
+                """
                 return False
 
         return Response()
@@ -177,9 +325,17 @@ def test_cursor_usage_refreshes_an_expired_access_token(
 
 
 def test_cached_claude_usage_is_reposted(
-        tmp_path,
-):
-    """A status-line sample survives into the next launch as percentages only."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    A status-line sample survives into the next launch as percentages only.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     env = {"PIDECK_CONFIG": str(tmp_path / "hook.json")}
     hook.remember_usage({
         "agent": "claude",
@@ -197,30 +353,81 @@ def test_cached_claude_usage_is_reposted(
 
 
 def test_claude_usage_posts_percents_and_backs_off(
-        tmp_path,
-):
-    """The local Claude sign-in fills 5h and weekly bars, and a recent sample is not asked again."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    The local Claude sign-in fills 5h and weekly bars, and a recent sample is not asked again.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     creds = tmp_path / "credentials.json"
     creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret-token"}}), encoding="utf-8")
     env = {"CLAUDE_CREDENTIALS": str(creds), "PIDECK_CONFIG": str(tmp_path / "hook.json")}
     calls = []
 
-    def opener(request, timeout):
+    def opener(
+        request: urllib.request.Request,
+        timeout: float,
+        ) -> Any:
+        """
+        Return a simulated provider response and record the outgoing request.
+
+        Args:
+            request (urllib.request.Request): Incoming request or outgoing provider request used by
+                this operation.
+            timeout (float): Maximum duration allowed for the simulated HTTP operation.
+
+        Returns:
+            Any: The provider value or response object described above.
+        """
         calls.append(request.get_header("Authorization"))
         assert request.get_header("Anthropic-beta") == "oauth-2025-04-20"
         assert timeout == 5
 
         class Response:
-            def read(self):
+            def read(
+                self,
+                ) -> bytes:
+                """
+                Encode the simulated provider response as JSON bytes.
+
+                Returns:
+                    bytes: Encoded response or image bytes produced by this operation.
+                """
                 return json.dumps({
                     "five_hour": {"utilization": 22, "resets_at": "2026-11-04T12:00:00Z"},
                     "seven_day": {"utilization": 41, "resets_at": "2026-11-08T12:00:00Z"},
                 }).encode()
 
-            def __enter__(self):
+            def __enter__(
+                self,
+                ) -> Self:
+                """
+                Enter the simulated HTTP response context.
+
+                Returns:
+                    Self: This context-managed response instance.
+                """
                 return self
 
-            def __exit__(self, *args):
+            def __exit__(
+                self,
+                *args: Any,
+                ) -> bool:
+                """
+                Leave the simulated HTTP response context without suppressing exceptions.
+
+                Args:
+                    *args (Any): Additional arguments accepted by this callback or forwarded to the
+                        wrapped operation.
+
+                Returns:
+                    bool: True when the documented condition holds; otherwise False.
+                """
                 return False
 
         return Response()

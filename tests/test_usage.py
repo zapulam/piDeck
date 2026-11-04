@@ -1,4 +1,14 @@
-"""Account usage transport, provider parsing, and status-line installation regressions."""
+"""
+
+Account usage transport, provider parsing, and status-line installation regressions.
+
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping
+from fastapi.testclient import TestClient
+
 import json
 import sys
 from pathlib import Path
@@ -10,12 +20,21 @@ import install
 import pideck_hook as hook
 
 
-"""# --- Registry integration ---"""
+# --- Registry integration ---
 
 
 def test_usage_update_preserves_session_state_and_snapshot(
-        client):
-    """Usage updates must not wake a waiting agent, reset its age, or emit alerts."""
+    client: TestClient,
+    ) -> None:
+    """
+    Usage updates must not wake a waiting agent, reset its age, or emit alerts.
+
+    Args:
+        client (TestClient): Authenticated test client for the isolated application.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     client.post("/api/agents/event", json={"session_id": "s", "state": "waiting", "agent": "claude"})
     before = dict(client.app.state.agents.agents["s"])
     with client.websocket_connect("/ws") as ws:
@@ -46,16 +65,36 @@ def test_usage_update_preserves_session_state_and_snapshot(
     {"used_pct": 20, "window_minutes": 300, "resets_at": -1},
 ])
 def test_invalid_account_usage_is_rejected(
-        client, window):
-    """Reject invalid allowance percentages, durations, and reset timestamps at the API."""
+    client: TestClient,
+    window: dict[str, Any],
+    ) -> None:
+    """
+    Reject invalid allowance percentages, durations, and reset timestamps at the API.
+
+    Args:
+        client (TestClient): Authenticated test client for the isolated application.
+        window (dict[str, Any]): Token capacity used as the context-percentage denominator.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     response = client.post("/api/agents/event", json={"session_id": "s", "event": "UsageUpdate", "agent": "claude",
                                                      "usage": {"primary": window}})
     assert response.status_code == 422
 
 
 def test_normal_hook_updates_usage_without_erasing_other_provider(
-        client):
-    """A lifecycle event can carry usage; an event without metrics retains the last sample."""
+    client: TestClient,
+    ) -> None:
+    """
+    A lifecycle event can carry usage; an event without metrics retains the last sample.
+
+    Args:
+        client (TestClient): Authenticated test client for the isolated application.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     for kind in ("claude", "codex"):
         client.post("/api/agents/event", json={"session_id": kind, "state": "working", "agent": kind,
                                              "usage": {"primary": {"used_pct": 25, "window_minutes": 300}}})
@@ -64,12 +103,21 @@ def test_normal_hook_updates_usage_without_erasing_other_provider(
     assert client.app.state.hub.state["agent_usage"]["codex"]["primary"]["used_pct"] == 25
 
 
-"""# --- Provider metrics ---"""
+# --- Provider metrics ---
 
 
 def test_codex_context_uses_last_turn_and_latest_account_windows(
-        tmp_path):
-    """Parse recent Codex token events, separating context from cumulative token totals."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    Parse recent Codex token events, separating context from cumulative token totals.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     transcript = tmp_path / "rollout.jsonl"
     records = [
         {"type": "event_msg", "payload": {"type": "token_count", "info": {
@@ -92,8 +140,17 @@ def test_codex_context_uses_last_turn_and_latest_account_windows(
 
 
 def test_codex_notify_finds_only_its_session_in_custom_home(
-        tmp_path):
-    """Older notify payloads locate their own transcript under CODEX_HOME without a path."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    Older notify payloads locate their own transcript under CODEX_HOME without a path.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     sid = "12345678-1234-1234-1234-123456789abc"
     sessions = tmp_path / "sessions" / "2026" / "11" / "03"
     sessions.mkdir(parents=True)
@@ -106,8 +163,13 @@ def test_codex_notify_finds_only_its_session_in_custom_home(
     assert hook.codex_metrics({"transcript_path": str(tmp_path / "missing")}, {}) == {}
 
 
-def test_claude_statusline_uses_reported_context_and_handles_missing_windows():
-    """Keep real zeros, omit absent metrics, and forward no costs, prompts, or credentials."""
+def test_claude_statusline_uses_reported_context_and_handles_missing_windows() -> None:
+    """
+    Keep real zeros, omit absent metrics, and forward no costs, prompts, or credentials.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     payload = {"session_id": "s", "context_window": {"used_percentage": 0}, "rate_limits": {
         "five_hour": {"used_percentage": 26.5, "resets_at": 2000000000}, "seven_day": None},
         "cost": {"total_cost_usd": 123}, "message": "private"}
@@ -131,12 +193,21 @@ def test_claude_statusline_uses_reported_context_and_handles_missing_windows():
     assert derived["usage"]["primary"]["label"] == "5h" and derived["usage"]["primary"]["used_pct"] == 10
 
 
-"""# --- Status-line lifecycle ---"""
+# --- Status-line lifecycle ---
 
 
 def test_statusline_install_reinstall_and_uninstall_preserve_original(
-        tmp_path):
-    """Wrapping must be idempotent and uninstall must restore the exact user configuration."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    Wrapping must be idempotent and uninstall must restore the exact user configuration.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir()
     original = {"type": "command", "command": "echo original", "padding": 3}
@@ -153,8 +224,17 @@ def test_statusline_install_reinstall_and_uninstall_preserve_original(
 
 
 def test_statusline_dry_run_and_user_replacement_are_preserved(
-        tmp_path):
-    """Dry runs write nothing; uninstall retains a user replacement for piDeck's wrapper."""
+    tmp_path: Path,
+    ) -> None:
+    """
+    Dry runs write nothing; uninstall retains a user replacement for piDeck's wrapper.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir()
     original = {"statusLine": {"type": "command", "command": "echo old"}}
@@ -172,16 +252,43 @@ def test_statusline_dry_run_and_user_replacement_are_preserved(
 
 
 def test_original_statusline_still_receives_input_when_pideck_is_offline(
-        tmp_path, monkeypatch, capfd):
-    """A failed piDeck POST must not suppress the original status line or alter its stdin."""
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    ) -> None:
+    """
+    A failed piDeck POST must not suppress the original status line or alter its stdin.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
+            environment, and paths.
+        capfd (pytest.CaptureFixture[str]): Pytest fixture capturing output written through
+            operating-system file descriptors.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
     script = tmp_path / "original.py"
     script.write_text("import sys\nprint('original:' + sys.stdin.read())\n")
     config = tmp_path / "hook.json"
     config.write_text(json.dumps({"claude_status_line": {"command": f'"{sys.executable}" "{script}"'}}))
 
     def offline(
-            event, env):
-        """Simulate an unavailable display without waiting for a network timeout."""
+        event: Any,
+        env: Mapping[str, str],
+        ) -> None:
+        """
+        Simulate an unavailable display without waiting for a network timeout.
+
+        Args:
+            event (Any): Provider event name or event fields to handle.
+            env (Mapping[str, str]): Environment variables used to locate integration settings and
+                opt-in behavior.
+
+        Returns:
+            None: Assertions or fixture setup completed successfully.
+        """
         raise OSError("offline")
 
     monkeypatch.setattr(hook, "post", offline)

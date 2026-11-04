@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""Claude Code / Codex / Cursor hook -> piDeck. Stdlib only and never allowed to break your session.
+"""
+
+Claude Code / Codex / Cursor hook -> piDeck. Stdlib only and never allowed to break your session.
 
 Two ways in, same script:
 
@@ -26,7 +27,13 @@ and registers this script. Environment variables, if set, override that file:
   PIDECK_SEND_MESSAGES   set to 1 to also send a 200-character snippet of the assistant's last reply
                          (off by default: it crosses your network, and the server may be plain HTTP).
                          Or set "send_messages": true in ~/.config/pideck/hook.json.
+
 """
+
+from __future__ import annotations
+
+from typing import Any, Callable, Iterator, Mapping
+
 import json
 import math
 import os
@@ -57,16 +64,21 @@ PRIME_LIMIT = 24
 WORKING_AGE_SECONDS = 120
 
 
-"""# --- Usage helpers ---"""
+# --- Usage helpers ---
 
 
 def transcript_records(
-        transcript_path,
-):
-    """Yield recent JSON objects newest first, tolerating missing or truncated logs.
+    transcript_path: str | Path | None,
+    ) -> Iterator[dict[str, Any]]:
+    """
+    Yield recent JSON objects newest first, tolerating missing or truncated logs.
 
     Args:
-        transcript_path: Local session transcript to read, capped at TAIL_BYTES.
+        transcript_path (str | Path | None): Local session transcript to read, capped at TAIL_BYTES.
+
+    Returns:
+        Iterator[dict[str, Any]]: Newest-first iterator over valid JSON object records in the
+            bounded transcript tail.
 
     Yields:
         Parsed dictionary records; malformed lines and non-object records are skipped.
@@ -88,15 +100,16 @@ def transcript_records(
 
 
 def _reset_timestamp(
-        value,
-):
-    """Convert a provider reset time to Unix seconds.
+    value: Any,
+    ) -> float | None:
+    """
+    Convert a provider reset time to Unix seconds.
 
     Args:
-        value: Unix seconds, milliseconds, or an ISO-8601 timestamp.
+        value (Any): Unix seconds, milliseconds, or an ISO-8601 timestamp.
 
     Returns:
-        A non-negative Unix timestamp, or None when the value is absent or unusable.
+        float | None: A non-negative Unix timestamp, or None when the value is absent or unusable.
     """
     if value is None or value == "":
         return None
@@ -122,19 +135,21 @@ def _reset_timestamp(
 
 
 def usage_window(
-        data,
-        percent_key,
-        minutes,
-):
-    """Normalize one provider window, returning None for absent or invalid metrics.
+    data: Any,
+    percent_key: str,
+    minutes: Any,
+    ) -> dict[str, Any] | None:
+    """
+    Normalize one provider window, returning None for absent or invalid metrics.
 
     Args:
-        data: Provider window dictionary, or None when unavailable.
-        percent_key: Provider-specific key containing percent used.
-        minutes: Duration of the allowance window in minutes.
+        data (Any): Provider window dictionary, or None when unavailable.
+        percent_key (str): Provider-specific key containing percent used.
+        minutes (Any): Duration of the allowance window in minutes.
 
     Returns:
-        Only the numeric fields accepted by piDeck, without any account credentials.
+        dict[str, Any] | None: Only the numeric fields accepted by piDeck, without any account
+            credentials.
     """
     if not isinstance(data, dict):
         return None
@@ -156,17 +171,20 @@ def usage_window(
 
 
 def codex_metrics(
-        payload,
-        env,
-):
-    """Read context and account usage from this Codex session's latest token events.
+    payload: dict[str, Any],
+    env: Mapping[str, str],
+    ) -> dict[str, Any]:
+    """
+    Read context and account usage from this Codex session's latest token events.
 
     Args:
-        payload: Hook or notify payload, optionally containing transcript_path.
-        env: Environment mapping; CODEX_HOME overrides the default ~/.codex directory.
+        payload (dict[str, Any]): Hook or notify payload, optionally containing transcript_path.
+        env (Mapping[str, str]): Environment mapping; CODEX_HOME overrides the default ~/.codex
+            directory.
 
     Returns:
-        Available context_pct and usage fields. Missing data is never treated as zero.
+        dict[str, Any]: Available context_pct and usage fields. Missing data is never treated as
+            zero.
     """
     path = payload.get("transcript_path")
     if not path:
@@ -208,8 +226,21 @@ def codex_metrics(
     return result
 
 
-def context_pct(transcript_path, window):
-    """Best-effort (Claude Code transcripts): latest assistant prompt tokens / window. None if unknown."""
+def context_pct(
+    transcript_path: str | Path,
+    window: float,
+    ) -> float | None:
+    """
+    Best-effort (Claude Code transcripts): latest assistant prompt tokens / window. None if unknown.
+
+    Args:
+        transcript_path (str | Path): Local session transcript to inspect for recent context usage.
+        window (float): Token capacity used as the context-percentage denominator.
+
+    Returns:
+        float | None: Estimated context-used percentage capped at 100, or None when transcript usage
+            is unavailable.
+    """
     try:
         with open(transcript_path, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -234,7 +265,19 @@ def context_pct(transcript_path, window):
     return None
 
 
-def _saved(env):
+def _saved(
+    env: Mapping[str, str],
+    ) -> Any:
+    """
+    Read saved hook settings while tolerating absent or invalid files.
+
+    Args:
+        env (Mapping[str, str]): Environment variables used to locate integration settings and opt-
+            in behavior.
+
+    Returns:
+        Any: Decoded saved settings, or an empty dictionary when reading or parsing fails.
+    """
     path = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
     try:
         with open(path) as f:
@@ -243,28 +286,43 @@ def _saved(env):
         return {}
 
 
-def wants_messages(env):
+def wants_messages(
+    env: Mapping[str, str],
+    ) -> bool:
+    """
+    Resolve whether the user has opted in to forwarding assistant reply snippets.
+
+    Args:
+        env (Mapping[str, str]): Environment variables used to locate integration settings and opt-
+            in behavior.
+
+    Returns:
+        bool: True when environment settings or saved preferences enable reply snippets.
+    """
     v = env.get("PIDECK_SEND_MESSAGES")
     return v.lower() in ("1", "true", "yes") if v is not None else bool(_saved(env).get("send_messages"))
 
 
-"""# --- Event builders ---"""
+# --- Event builders ---
 
 
 def build_event(
-        payload,
-        env,
-        source="claude",
-):
-    """Build a lifecycle event with optional context and account-usage metrics.
+    payload: dict[str, Any],
+    env: Mapping[str, str],
+    source: str = 'claude',
+    ) -> dict[str, Any] | None:
+    """
+    Build a lifecycle event with optional context and account-usage metrics.
 
     Args:
-        payload: Claude Code or Codex lifecycle hook input.
-        env: Hook environment controlling display names, messages, and local paths.
-        source: Provider identifier, normally claude or codex.
+        payload (dict[str, Any]): Claude Code or Codex lifecycle hook input.
+        env (Mapping[str, str]): Hook environment controlling display names, messages, and local
+            paths.
+        source (str): Provider identifier, normally claude or codex.
 
     Returns:
-        A piDeck event containing only the selected display fields and metrics.
+        dict[str, Any] | None: A piDeck event containing only the selected display fields and
+            metrics.
     """
     if source == "cursor":
         return build_cursor_event(payload, env)
@@ -298,31 +356,34 @@ def build_event(
 
 
 def _token(
-        value,
-        limit=60,
-):
-    """Keep an identifier short and free of whitespace.
+    value: Any,
+    limit: int = 60,
+    ) -> str:
+    """
+    Keep an identifier short and free of whitespace.
 
     Args:
-        value: Raw id from a hook payload or a file name.
-        limit: Maximum characters to keep.
+        value (Any): Raw id from a hook payload or a file name.
+        limit (int): Maximum characters to keep.
 
     Returns:
-        A single-line identifier, or an empty string.
+        str: A single-line identifier, or an empty string.
     """
     return "".join(str(value or "").split())[:limit]
 
 
 def cursor_subagent_ids(
-        payload,
-):
-    """Session and parent ids for a Cursor subagent, without its task text.
+    payload: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+    """
+    Session and parent ids for a Cursor subagent, without its task text.
 
     Args:
-        payload: subagentStart or subagentStop input.
+        payload (dict[str, Any]): subagentStart or subagentStop input.
 
     Returns:
-        (session_id, parent_id). Either is None when the payload has no identity.
+        tuple[str | None, str | None]: (session_id, parent_id). Either is None when the payload has
+            no identity.
     """
     parent = payload.get("parent_conversation_id") or payload.get("conversation_id")
     sub = payload.get("subagent_id") or payload.get("tool_call_id")
@@ -337,15 +398,17 @@ def cursor_subagent_ids(
 
 
 def cursor_hook_response(
-        event,
-):
-    """The JSON Cursor requires before it will continue a permission hook.
+    event: str | None,
+    ) -> dict[str, Any]:
+    """
+    The JSON Cursor requires before it will continue a permission hook.
 
     Args:
-        event: Cursor hook_event_name.
+        event (str | None): Cursor hook_event_name.
 
     Returns:
-        A schema-valid response. subagentStart must allow, or Cursor blocks the child.
+        dict[str, Any]: A schema-valid response. subagentStart must allow, or Cursor blocks the
+            child.
     """
     if event == "beforeSubmitPrompt":
         return {"continue": True}
@@ -355,15 +418,16 @@ def cursor_hook_response(
 
 
 def cursor_detail(
-        payload,
-):
-    """A short public label for one Cursor chat, never a prompt or account identity.
+    payload: dict[str, Any],
+    ) -> str | None:
+    """
+    A short public label for one Cursor chat, never a prompt or account identity.
 
     Args:
-        payload: Cursor hook input. Only the composer mode and model slug are read.
+        payload (dict[str, Any]): Cursor hook input. Only the composer mode and model slug are read.
 
     Returns:
-        Ask or edit mode plus the model slug, trimmed to 64 characters, or None.
+        str | None: Ask or edit mode plus the model slug, trimmed to 64 characters, or None.
     """
     parts = []
     mode = payload.get("composer_mode")
@@ -377,18 +441,19 @@ def cursor_detail(
 
 
 def build_cursor_event(
-        payload,
-        env,
-):
-    """Translate Cursor hooks without forwarding prompts, tool inputs, or account identity.
+    payload: dict[str, Any],
+    env: Mapping[str, str],
+    ) -> dict[str, Any] | None:
+    """
+    Translate Cursor hooks without forwarding prompts, tool inputs, or account identity.
 
     Args:
-        payload: Cursor's documented hook input, keyed by conversation_id.
-        env: Environment mapping supporting the PIDECK_NAME tile label override.
+        payload (dict[str, Any]): Cursor's documented hook input, keyed by conversation_id.
+        env (Mapping[str, str]): Environment mapping supporting the PIDECK_NAME tile label override.
 
     Returns:
-        A piDeck lifecycle or context-only event, or None for unrelated hooks.
-        Context is cleared on later activity because preCompact is only a snapshot.
+        dict[str, Any] | None: A piDeck lifecycle or context-only event, or None for unrelated
+            hooks. Context is cleared on later activity because preCompact is only a snapshot.
     """
     hook_name = payload.get("hook_event_name")
     event = CURSOR_EVENTS.get(hook_name)
@@ -432,8 +497,22 @@ def build_cursor_event(
     return ev
 
 
-def build_notify_event(payload, env):
-    """Codex `notify` payload (kebab-case keys). Only 'agent-turn-complete' exists today -> done."""
+def build_notify_event(
+    payload: dict[str, Any],
+    env: Mapping[str, str],
+    ) -> dict[str, Any] | None:
+    """
+    Codex `notify` payload (kebab-case keys). Only 'agent-turn-complete' exists today -> done.
+
+    Args:
+        payload (dict[str, Any]): Decoded provider payload to inspect or translate.
+        env (Mapping[str, str]): Environment variables used to locate integration settings and opt-
+            in behavior.
+
+    Returns:
+        dict[str, Any] | None: Done-state agent update for a supported Codex completion event,
+            otherwise None.
+    """
     if payload.get("type") != "agent-turn-complete":
         return None
     ev = {
@@ -451,15 +530,16 @@ def build_notify_event(payload, env):
 
 
 def statusline_context(
-        payload,
-):
-    """Context percent from Claude's status line, including the token fallback.
+    payload: dict[str, Any],
+    ) -> float | None:
+    """
+    Context percent from Claude's status line, including the token fallback.
 
     Args:
-        payload: Claude Code status-line JSON.
+        payload (dict[str, Any]): Claude Code status-line JSON.
 
     Returns:
-        A percentage from 0 to 100, or None before the first model response.
+        float | None: A percentage from 0 to 100, or None before the first model response.
     """
     window = payload.get("context_window") if isinstance(payload.get("context_window"), dict) else {}
     pct = window.get("used_percentage")
@@ -480,15 +560,16 @@ def statusline_context(
 
 
 def claude_context_window(
-        path,
-):
-    """Read the context-window size recorded in a Claude transcript.
+    path: str | Path | None,
+    ) -> int:
+    """
+    Read the context-window size recorded in a Claude transcript.
 
     Args:
-        path: Session JSONL file. Only the trailing bytes are scanned.
+        path (str | Path | None): Session JSONL file. Only the trailing bytes are scanned.
 
     Returns:
-        The recorded window, or 200000 when the file does not name one.
+        int: The recorded window, or 200000 when the file does not name one.
     """
     try:
         with open(path, "rb") as stream:
@@ -505,15 +586,17 @@ def claude_context_window(
 
 
 def build_statusline_event(
-        payload,
-):
-    """Convert Claude's documented status-line metrics without changing session state.
+    payload: dict[str, Any],
+    ) -> dict[str, Any]:
+    """
+    Convert Claude's documented status-line metrics without changing session state.
 
     Args:
-        payload: Claude Code status-line JSON received on stdin.
+        payload (dict[str, Any]): Claude Code status-line JSON received on stdin.
 
     Returns:
-        A usage-only event containing only context, account percentages, and identity.
+        dict[str, Any]: A usage-only event containing only context, account percentages, and
+            identity.
     """
     limits = payload.get("rate_limits") if isinstance(payload.get("rate_limits"), dict) else {}
     ev = {"session_id": payload.get("session_id") or "unknown", "event": "UsageUpdate", "agent": "claude"}
@@ -532,14 +615,18 @@ def build_statusline_event(
 
 
 def run_statusline(
-        raw,
-        env,
-):
-    """Forward Claude metrics and retain the user's existing status-line output.
+    raw: str,
+    env: Mapping[str, str],
+    ) -> None:
+    """
+    Forward Claude metrics and retain the user's existing status-line output.
 
     Args:
-        raw: Unmodified JSON input, also passed to the original status-line command.
-        env: Environment mapping used to load piDeck's settings.
+        raw (str): Unmodified JSON input, also passed to the original status-line command.
+        env (Mapping[str, str]): Environment mapping used to load piDeck's settings.
+
+    Returns:
+        None: No value is returned.
     """
     payload = {}
     try:
@@ -556,11 +643,22 @@ def run_statusline(
         print(f"Claude · {pct:g}% ctx" if isinstance(pct, (int, float)) else "Claude")
 
 
-"""# --- Hook transport and entry point ---"""
+# --- Hook transport and entry point ---
 
 
-def parse_args(argv):
-    """-> (source, notify_json_or_None)"""
+def parse_args(
+    argv: list[str],
+    ) -> tuple[str, str | None]:
+    """
+    Parse the provider flag and detect a legacy Codex notify payload.
+
+    Args:
+        argv (list[str]): Command-line arguments, or None to read the current process arguments.
+
+    Returns:
+        tuple[str, str | None]: Selected provider and optional JSON notify payload supplied on the
+            command line.
+    """
     source = "claude"
     rest = list(argv)
     if "--source" in rest:
@@ -573,9 +671,21 @@ def parse_args(argv):
     return source, None
 
 
-def load_settings(env):
-    """url/token: environment wins, then the file the installer wrote, then defaults.
-    The file matters because apps started from a dock or Start menu don't see shell exports."""
+def load_settings(
+    env: Mapping[str, str],
+    ) -> dict[str, str]:
+    """
+    url/token: environment wins, then the file the installer wrote, then defaults.
+    The file matters because apps started from a dock or Start menu don't see shell exports.
+
+    Args:
+        env (Mapping[str, str]): Environment variables used to locate integration settings and opt-
+            in behavior.
+
+    Returns:
+        dict[str, str]: Display URL and token resolved from environment, saved settings, then
+            defaults.
+    """
     saved = _saved(env)
     return {
         "url": env.get("PIDECK_URL") or saved.get("url") or "http://localhost:8765",
@@ -583,30 +693,39 @@ def load_settings(env):
     }
 
 
+# --- Cached allowance samples ---
+
+
 def usage_cache_path(
-        env,
-):
-    """Where the last account-usage sample is kept so a later launch can show it.
+    env: Mapping[str, str],
+    ) -> Path:
+    """
+    Where the last account-usage sample is kept so a later launch can show it.
 
     Args:
-        env: Environment mapping. PIDECK_CONFIG selects a different hook directory.
+        env (Mapping[str, str]): Environment mapping. PIDECK_CONFIG selects a different hook
+            directory.
 
     Returns:
-        The cache path beside hook.json. The file holds percentages only.
+        Path: The cache path beside hook.json. The file holds percentages only.
     """
     saved = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
     return Path(saved).parent / "usage-cache.json"
 
 
 def remember_usage(
-        ev,
-        env,
-):
-    """Store one provider's allowance sample for the next piDeck launch.
+    ev: dict[str, Any],
+    env: Mapping[str, str],
+    ) -> None:
+    """
+    Store one provider's allowance sample for the next piDeck launch.
 
     Args:
-        ev: Event that may contain an agent name and a usage object.
-        env: Environment mapping used to locate the cache.
+        ev (dict[str, Any]): Event that may contain an agent name and a usage object.
+        env (Mapping[str, str]): Environment mapping used to locate the cache.
+
+    Returns:
+        None: No value is returned.
     """
     usage = ev.get("usage") if isinstance(ev, dict) else None
     agent = ev.get("agent") if isinstance(ev, dict) else None
@@ -639,15 +758,17 @@ def remember_usage(
 
 
 def cached_usage_events(
-        env,
-):
-    """Turn the saved allowance sample into usage-only events.
+    env: Mapping[str, str],
+    ) -> list[dict[str, Any]]:
+    """
+    Turn the saved allowance sample into usage-only events.
 
     Args:
-        env: Environment mapping used to locate the cache.
+        env (Mapping[str, str]): Environment mapping used to locate the cache.
 
     Returns:
-        One UsageUpdate per cached provider. An unreadable cache yields nothing.
+        list[dict[str, Any]]: One UsageUpdate per cached provider. An unreadable cache yields
+            nothing.
     """
     try:
         data = json.loads(usage_cache_path(env).read_text(encoding="utf-8"))
@@ -669,15 +790,16 @@ def cached_usage_events(
 
 
 def _load_cache(
-        env,
-):
-    """Read the percentage cache, or an empty object when it is missing.
+    env: Mapping[str, str],
+    ) -> dict[str, Any]:
+    """
+    Read the percentage cache, or an empty object when it is missing.
 
     Args:
-        env: Environment mapping used to locate the cache.
+        env (Mapping[str, str]): Environment mapping used to locate the cache.
 
     Returns:
-        The cache object. A missing or unreadable file yields an empty dict.
+        dict[str, Any]: The cache object. A missing or unreadable file yields an empty dict.
     """
     try:
         data = json.loads(usage_cache_path(env).read_text(encoding="utf-8"))
@@ -687,16 +809,20 @@ def _load_cache(
 
 
 def stamp_fetch(
-        env,
-        agent,
-        when,
-):
-    """Remember when a provider was last asked, even if the answer was unusable.
+    env: Mapping[str, str],
+    agent: str,
+    when: float,
+    ) -> None:
+    """
+    Remember when a provider was last asked, even if the answer was unusable.
 
     Args:
-        env: Environment mapping used to locate the cache.
-        agent: Provider name, one of claude, codex, or cursor.
-        when: Unix time of the attempt.
+        env (Mapping[str, str]): Environment mapping used to locate the cache.
+        agent (str): Provider name, one of claude, codex, or cursor.
+        when (float): Unix time of the attempt.
+
+    Returns:
+        None: No value is returned.
     """
     path = usage_cache_path(env)
     try:
@@ -715,16 +841,20 @@ def stamp_fetch(
 
 
 def note_fetch(
-        env,
-        agent,
-        note,
-):
-    """Record why an account-usage request produced no bars. Never store a token or body.
+    env: Mapping[str, str],
+    agent: str,
+    note: str,
+    ) -> None:
+    """
+    Record why an account-usage request produced no bars. Never store a token or body.
 
     Args:
-        env: Environment mapping used to locate the cache.
-        agent: Provider name.
-        note: Short status such as http_401 or no_sign_in.
+        env (Mapping[str, str]): Environment mapping used to locate the cache.
+        agent (str): Provider name.
+        note (str): Short status such as http_401 or no_sign_in.
+
+    Returns:
+        None: No value is returned.
     """
     path = usage_cache_path(env)
     try:
@@ -743,17 +873,18 @@ def note_fetch(
 
 
 def fetched_at(
-        env,
-        agent,
-):
-    """When this provider was last asked for account usage.
+    env: Mapping[str, str],
+    agent: str,
+    ) -> float:
+    """
+    When this provider was last asked for account usage.
 
     Args:
-        env: Environment mapping used to locate the cache.
-        agent: Provider name.
+        env (Mapping[str, str]): Environment mapping used to locate the cache.
+        agent (str): Provider name.
 
     Returns:
-        A Unix time, or 0 when this provider has not been asked.
+        float: A Unix time, or 0 when this provider has not been asked.
     """
     entry = _load_cache(env).get(agent)
     if not isinstance(entry, dict):
@@ -764,22 +895,26 @@ def fetched_at(
         return 0
 
 
+# --- Provider allowance normalization ---
+
+
 def _window(
-        percent,
-        minutes,
-        resets_at,
-        label,
-):
-    """Build one allowance window, or None when the percent is unusable.
+    percent: Any,
+    minutes: int,
+    resets_at: Any,
+    label: str,
+    ) -> dict[str, Any] | None:
+    """
+    Build one allowance window, or None when the percent is unusable.
 
     Args:
-        percent: Percent used, already numeric.
-        minutes: Window length in minutes.
-        resets_at: Unix reset time, or None.
-        label: Short bar caption such as Included or API.
+        percent (Any): Percent used, already numeric.
+        minutes (int): Window length in minutes.
+        resets_at (Any): Unix reset time, or None.
+        label (str): Short bar caption such as Included or API.
 
     Returns:
-        A piDeck usage window, or None.
+        dict[str, Any] | None: A piDeck usage window, or None.
     """
     window = usage_window({"used_percentage": percent, "resets_at": resets_at}, "used_percentage", minutes)
     if window and label:
@@ -788,17 +923,18 @@ def _window(
 
 
 def _field(
-        source,
-        *names,
-):
-    """Return the first present value among several spellings of one field.
+    source: Any,
+    *names: str,
+    ) -> Any:
+    """
+    Return the first present value among several spellings of one field.
 
     Args:
-        source: Object that may hold the field.
-        names: Candidate keys, preferred name first.
+        source (Any): Object that may hold the field.
+        *names (str): Candidate keys, preferred name first.
 
     Returns:
-        The first value that is not None, or None when none of the keys exist.
+        Any: First present non-null value matching a supplied field name, otherwise None.
     """
     if not isinstance(source, dict):
         return None
@@ -809,15 +945,17 @@ def _field(
 
 
 def cursor_usage_from_body(
-        payload,
-):
-    """Read Cursor's current-period usage payload down to two public bars.
+    payload: Any,
+    ) -> dict[str, Any] | None:
+    """
+    Read Cursor's current-period usage payload down to two public bars.
 
     Args:
-        payload: JSON object from DashboardService/GetCurrentPeriodUsage.
+        payload (Any): JSON object from DashboardService/GetCurrentPeriodUsage.
 
     Returns:
-        A usage object with Included and API windows, or None when no percent is present.
+        dict[str, Any] | None: A usage object with Included and API windows, or None when no percent
+            is present.
     """
     if not isinstance(payload, dict):
         return None
@@ -846,16 +984,20 @@ def cursor_usage_from_body(
     return {"primary": primary, "secondary": secondary}
 
 
+# --- Cursor sign-in and allowance requests ---
+
+
 def cursor_state_db(
-        env,
-):
-    """Locate Cursor's local state database without opening it.
+    env: Mapping[str, str],
+    ) -> Path:
+    """
+    Locate Cursor's local state database without opening it.
 
     Args:
-        env: Environment mapping. CURSOR_STATE_DB overrides the platform path.
+        env (Mapping[str, str]): Environment mapping. CURSOR_STATE_DB overrides the platform path.
 
     Returns:
-        Path to state.vscdb.
+        Path: Path to state.vscdb.
     """
     override = env.get("CURSOR_STATE_DB")
     if override:
@@ -870,17 +1012,18 @@ def cursor_state_db(
 
 
 def read_cursor_value(
-        env,
-        key,
-):
-    """Read one Cursor sign-in value. Callers must not log or forward it.
+    env: Mapping[str, str],
+    key: str,
+    ) -> str | None:
+    """
+    Read one Cursor sign-in value. Callers must not log or forward it.
 
     Args:
-        env: Environment mapping used to find state.vscdb.
-        key: ItemTable key, such as cursorAuth/accessToken.
+        env (Mapping[str, str]): Environment mapping used to find state.vscdb.
+        key (str): ItemTable key, such as cursorAuth/accessToken.
 
     Returns:
-        The stored string, or None when the database or the key is unavailable.
+        str | None: The stored string, or None when the database or the key is unavailable.
     """
     path = cursor_state_db(env)
     if not path.is_file():
@@ -908,15 +1051,16 @@ def read_cursor_value(
 
 
 def read_cursor_token(
-        env,
-):
-    """Read the local Cursor access token. Callers must not log or forward it.
+    env: Mapping[str, str],
+    ) -> str | None:
+    """
+    Read the local Cursor access token. Callers must not log or forward it.
 
     Args:
-        env: Environment mapping used to find state.vscdb.
+        env (Mapping[str, str]): Environment mapping used to find state.vscdb.
 
     Returns:
-        The access token, or None when the database or the key is unavailable.
+        str | None: The access token, or None when the database or the key is unavailable.
     """
     return read_cursor_value(env, "cursorAuth/accessToken")
 
@@ -926,17 +1070,18 @@ CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 
 
 def refresh_cursor_token(
-        env,
-        opener,
-):
-    """Exchange Cursor's refresh token for a new access token. Nothing is written back.
+    env: Mapping[str, str],
+    opener: Callable[..., Any] | None,
+    ) -> tuple[str | None, str]:
+    """
+    Exchange Cursor's refresh token for a new access token. Nothing is written back.
 
     Args:
-        env: Environment mapping used to find state.vscdb.
-        opener: Callable matching urllib.request.urlopen.
+        env (Mapping[str, str]): Environment mapping used to find state.vscdb.
+        opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen.
 
     Returns:
-        The new access token and an empty note, or None and a short reason.
+        tuple[str | None, str]: The new access token and an empty note, or None and a short reason.
     """
     refresh = read_cursor_value(env, "cursorAuth/refreshToken")
     if not refresh:
@@ -967,15 +1112,16 @@ def refresh_cursor_token(
 
 
 def _cursor_usage_request(
-        token,
-):
-    """Build the current-period usage request. The token stays in the header only.
+    token: str,
+    ) -> urllib.request.Request:
+    """
+    Build the current-period usage request. The token stays in the header only.
 
     Args:
-        token: Cursor access token.
+        token (str): Cursor access token.
 
     Returns:
-        The POST request.
+        urllib.request.Request: The POST request.
     """
     return urllib.request.Request(
         "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
@@ -990,17 +1136,19 @@ def _cursor_usage_request(
 
 
 def fetch_cursor_usage(
-        env,
-        opener=None,
-):
-    """Ask Cursor's usage service for percentages. The token is not included in the result.
+    env: Mapping[str, str],
+    opener: Callable[..., Any] | None = None,
+    ) -> dict[str, Any] | None:
+    """
+    Ask Cursor's usage service for percentages. The token is not included in the result.
 
     Args:
-        env: Environment mapping used to find the local sign-in.
-        opener: Callable matching urllib.request.urlopen, for tests.
+        env (Mapping[str, str]): Environment mapping used to find the local sign-in.
+        opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen, for tests.
 
     Returns:
-        A usage-only Cursor event, or None when the sign-in or the service is unavailable.
+        dict[str, Any] | None: A usage-only Cursor event, or None when the sign-in or the service is
+            unavailable.
     """
     open_url = opener or urllib.request.urlopen
     token = read_cursor_token(env)
@@ -1045,16 +1193,20 @@ def fetch_cursor_usage(
 CLAUDE_USAGE_INTERVAL = 1800
 
 
+# --- Claude sign-in and allowance requests ---
+
+
 def claude_credentials_path(
-        env,
-):
-    """Locate the Claude sign-in file without opening it.
+    env: Mapping[str, str],
+    ) -> Path:
+    """
+    Locate the Claude sign-in file without opening it.
 
     Args:
-        env: Environment mapping. CLAUDE_CREDENTIALS overrides the home path.
+        env (Mapping[str, str]): Environment mapping. CLAUDE_CREDENTIALS overrides the home path.
 
     Returns:
-        Path to the credentials file.
+        Path: Path to the credentials file.
     """
     override = env.get("CLAUDE_CREDENTIALS")
     if override:
@@ -1064,15 +1216,16 @@ def claude_credentials_path(
 
 
 def read_claude_token(
-        env,
-):
-    """Read the local Claude access token. Callers must not log or forward it.
+    env: Mapping[str, str],
+    ) -> str | None:
+    """
+    Read the local Claude access token. Callers must not log or forward it.
 
     Args:
-        env: Environment mapping used to find the credentials file.
+        env (Mapping[str, str]): Environment mapping used to find the credentials file.
 
     Returns:
-        The access token, or None when the file or the sign-in is unavailable.
+        str | None: The access token, or None when the file or the sign-in is unavailable.
     """
     path = claude_credentials_path(env)
     try:
@@ -1090,15 +1243,16 @@ def read_claude_token(
 
 
 def claude_sign_in_note(
-        env,
-):
-    """Why the Claude sign-in could not be read, without including its contents.
+    env: Mapping[str, str],
+    ) -> str:
+    """
+    Why the Claude sign-in could not be read, without including its contents.
 
     Args:
-        env: Environment mapping used to find the credentials file.
+        env (Mapping[str, str]): Environment mapping used to find the credentials file.
 
     Returns:
-        A short note such as missing_file, bad_json, or the key names that were present.
+        str: A short note such as missing_file, bad_json, or the key names that were present.
     """
     path = claude_credentials_path(env)
     if not path.is_file():
@@ -1124,15 +1278,17 @@ def claude_sign_in_note(
 
 
 def claude_usage_from_body(
-        payload,
-):
-    """Read Claude's 5-hour and weekly utilization down to two public bars.
+    payload: Any,
+    ) -> dict[str, Any] | None:
+    """
+    Read Claude's 5-hour and weekly utilization down to two public bars.
 
     Args:
-        payload: JSON object with five_hour and seven_day utilization.
+        payload (Any): JSON object with five_hour and seven_day utilization.
 
     Returns:
-        A usage object with 5h and Weekly windows, or None when both are missing.
+        dict[str, Any] | None: A usage object with 5h and Weekly windows, or None when both are
+            missing.
     """
     if not isinstance(payload, dict):
         return None
@@ -1148,19 +1304,21 @@ def claude_usage_from_body(
 
 
 def fetch_claude_usage(
-        env,
-        opener=None,
-        now=None,
-):
-    """Ask Claude for allowance percents. The token is not included in the result.
+    env: Mapping[str, str],
+    opener: Callable[..., Any] | None = None,
+    now: float | None = None,
+    ) -> dict[str, Any] | None:
+    """
+    Ask Claude for allowance percents. The token is not included in the result.
 
     Args:
-        env: Environment mapping used to find the local sign-in and the cache.
-        opener: Callable matching urllib.request.urlopen, for tests.
-        now: Current Unix time, or None to use the clock.
+        env (Mapping[str, str]): Environment mapping used to find the local sign-in and the cache.
+        opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen, for tests.
+        now (float | None): Current Unix time, or None to use the clock.
 
     Returns:
-        A usage-only Claude event, or None when a recent sample exists or the service is unavailable.
+        dict[str, Any] | None: A usage-only Claude event, or None when a recent sample exists or the
+            service is unavailable.
     """
     now = time.time() if now is None else now
     if now - fetched_at(env, "claude") < CLAUDE_USAGE_INTERVAL:
@@ -1197,18 +1355,22 @@ def fetch_claude_usage(
     return event
 
 
+# --- Startup session discovery ---
+
+
 def _header_fields(
-        path,
-        wanted,
-):
-    """Read a few named fields from the start of a session file, never the message body.
+    path: Path,
+    wanted: tuple[str, ...],
+    ) -> dict[str, str]:
+    """
+    Read a few named fields from the start of a session file, never the message body.
 
     Args:
-        path: JSONL session file.
-        wanted: Field names to copy when present on an object.
+        path (Path): JSONL session file.
+        wanted (tuple[str, ...]): Field names to copy when present on an object.
 
     Returns:
-        The first values found for those names.
+        dict[str, str]: The first values found for those names.
     """
     found = {}
     try:
@@ -1232,21 +1394,22 @@ def _header_fields(
 
 
 def _recent_files(
-        root,
-        pattern,
-        now,
-        stale_seconds,
-):
-    """Newest files under root whose mtime is still inside the stale window.
+    root: Path,
+    pattern: str,
+    now: float,
+    stale_seconds: float,
+    ) -> list[tuple[float, Path]]:
+    """
+    Newest files under root whose mtime is still inside the stale window.
 
     Args:
-        root: Directory to walk. Missing directories yield nothing.
-        pattern: Glob such as *.jsonl.
-        now: Current Unix time.
-        stale_seconds: Maximum age to treat as a live session.
+        root (Path): Directory to walk. Missing directories yield nothing.
+        pattern (str): Glob such as *.jsonl.
+        now (float): Current Unix time.
+        stale_seconds (float): Maximum age to treat as a live session.
 
     Returns:
-        Up to PRIME_LIMIT (mtime, path) pairs, newest first.
+        list[tuple[float, Path]]: Up to PRIME_LIMIT (mtime, path) pairs, newest first.
     """
     if not root.is_dir():
         return []
@@ -1263,19 +1426,21 @@ def _recent_files(
 
 
 def discover_sessions(
-        home,
-        now,
-        stale_seconds,
-):
-    """Tiles for sessions that were already open before piDeck started.
+    home: Path,
+    now: float,
+    stale_seconds: float,
+    ) -> list[dict[str, Any]]:
+    """
+    Tiles for sessions that were already open before piDeck started.
 
     Args:
-        home: Home directory containing .claude, .codex, and .cursor.
-        now: Current Unix time.
-        stale_seconds: Ignore files older than this.
+        home (Path): Home directory containing .claude, .codex, and .cursor.
+        now (float): Current Unix time.
+        stale_seconds (float): Ignore files older than this.
 
     Returns:
-        Lifecycle events with a project name and idle or working state. No transcript text.
+        list[dict[str, Any]]: Lifecycle events with a project name and idle or working state. No
+            transcript text.
     """
     events = []
     for modified, path in _recent_files(home / ".claude" / "projects", "*.jsonl", now, stale_seconds):
@@ -1340,19 +1505,22 @@ def discover_sessions(
 
 
 def prime_events(
-        env,
-        now=None,
-        opener=None,
-):
-    """Usage samples and already-open sessions to publish when piDeck starts.
+    env: Mapping[str, str],
+    now: float | None = None,
+    opener: Callable[..., Any] | None = None,
+    ) -> list[dict[str, Any]]:
+    """
+    Usage samples and already-open sessions to publish when piDeck starts.
 
     Args:
-        env: Environment mapping for home, cache, and the local sign-ins.
-        now: Current Unix time, or None to use the clock.
-        opener: Optional urlopen replacement for the Claude and Cursor usage requests.
+        env (Mapping[str, str]): Environment mapping for home, cache, and the local sign-ins.
+        now (float | None): Current Unix time, or None to use the clock.
+        opener (Callable[..., Any] | None): Optional urlopen replacement for the Claude and Cursor
+            usage requests.
 
     Returns:
-        Events safe to post: percentages, project names, and states. No prompts.
+        list[dict[str, Any]]: Events safe to post: percentages, project names, and states. No
+            prompts.
     """
     now = time.time() if now is None else now
     home = Path(env.get("PIDECK_HOME") or Path.home())
@@ -1368,7 +1536,25 @@ def prime_events(
     return events
 
 
-def post(ev, env):
+# --- Event delivery and command-line entry point ---
+
+
+def post(
+    ev: dict[str, Any],
+    env: Mapping[str, str],
+    ) -> None:
+    """
+    Cache permitted usage values and post one agent event to the configured display.
+
+    Args:
+        ev (dict[str, Any]): Agent event containing the session identifier and permitted update
+            fields.
+        env (Mapping[str, str]): Environment variables used to locate integration settings and opt-
+            in behavior.
+
+    Returns:
+        None: No value is returned.
+    """
     remember_usage(ev, env)
     conf = load_settings(env)
     headers = {"Content-Type": "application/json"}
@@ -1378,7 +1564,14 @@ def post(ev, env):
     urllib.request.urlopen(urllib.request.Request(url, json.dumps(ev).encode(), headers), timeout=2).read()
 
 
-def main():
+def main() -> int:
+    """
+    Dispatch lifecycle, notify, status-line, or startup updates without breaking the agent.
+
+    Returns:
+        int: Zero even when input, provider access, or display delivery fails, so the agent can
+            continue.
+    """
     source = "claude"
     cursor_response = {}
     try:

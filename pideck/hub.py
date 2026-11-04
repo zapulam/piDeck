@@ -1,9 +1,13 @@
-"""Core state store + websocket fan-out.
+"""
+
+Core state store + websocket fan-out.
 
 Sources (spotify, slack, agents, mock) never talk to the UI directly. They call
 `hub.update(key, value)` for durable state or `hub.alert(...)` for a transient
 full-screen takeover; the hub pushes both to every connected browser.
+
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,23 +19,69 @@ from typing import Any
 
 from fastapi import WebSocket
 
+# --- Shared state and display broadcasts ---
+
 log = logging.getLogger("pideck.hub")
 
 
 class Hub:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        ) -> None:
+        """
+        Initialize the shared source state and connected display registry.
+
+        Returns:
+            None: No value is returned.
+        """
         self.state: dict[str, Any] = {"spotify": None, "slack": [], "agents": [], "agent_usage": {}}
         self.clients: set[WebSocket] = set()
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(
+        self,
+        ws: WebSocket,
+        ) -> None:
+        """
+        Accept a display websocket and send its initial state snapshot.
+
+        Args:
+            ws (WebSocket): Display websocket to accept, update, or remove.
+
+        Returns:
+            None: No value is returned.
+        """
         await ws.accept()
         self.clients.add(ws)
         await ws.send_text(json.dumps({"type": "snapshot", "state": self.state}))
 
-    def disconnect(self, ws: WebSocket) -> None:
+    def disconnect(
+        self,
+        ws: WebSocket,
+        ) -> None:
+        """
+        Remove a display websocket from the connected-client registry.
+
+        Args:
+            ws (WebSocket): Display websocket to accept, update, or remove.
+
+        Returns:
+            None: No value is returned.
+        """
         self.clients.discard(ws)
 
-    async def _broadcast(self, msg: dict) -> None:
+    async def _broadcast(
+        self,
+        msg: dict,
+        ) -> None:
+        """
+        Send a JSON event to each display and discard disconnected clients.
+
+        Args:
+            msg (dict): JSON-compatible event to deliver to connected displays.
+
+        Returns:
+            None: No value is returned.
+        """
         text = json.dumps(msg)
         dead = []
         for ws in list(self.clients):
@@ -42,31 +92,49 @@ class Hub:
         for ws in dead:
             self.clients.discard(ws)
 
-    async def update(self, key: str, value: Any) -> None:
+    async def update(
+        self,
+        key: str,
+        value: Any,
+        ) -> None:
+        """
+        Store a source state value and broadcast the update to connected displays.
+
+        Args:
+            key (str): State key or stored field to look up or update.
+            value (Any): Value to normalize, validate, or publish.
+
+        Returns:
+            None: No value is returned.
+        """
         self.state[key] = value
         await self._broadcast({"type": "state", "key": key, "value": value})
 
     async def alert(
-            self,
-            kind: str,
-            title: str,
-            body: str = "",
-            *,
-            state: str = "",
-            agent: str = "",
-            seconds: float = 8,
-            session_id: str = "",
-    ) -> None:
-        """Broadcast a transient takeover to connected displays.
+        self,
+        kind: str,
+        title: str,
+        body: str = '',
+        *,
+        state: str = '',
+        agent: str = '',
+        seconds: float = 8,
+        session_id: str = '',
+        ) -> None:
+        """
+        Broadcast a transient takeover to connected displays.
 
         Args:
-            kind: Alert source, either agent or Slack.
-            title: Main text shown in the takeover.
-            body: Optional supporting message.
-            state: Agent state used to style the takeover.
-            agent: Provider associated with an agent alert.
-            seconds: Requested display duration in seconds.
-            session_id: Exact session owning an agent alert, even for duplicate names.
+            kind (str): Alert source, either agent or Slack.
+            title (str): Main text shown in the takeover.
+            body (str): Optional supporting message.
+            state (str): Agent state used to style the takeover.
+            agent (str): Provider associated with an agent alert.
+            seconds (float): Requested display duration in seconds.
+            session_id (str): Exact session owning an agent alert, even for duplicate names.
+
+        Returns:
+            None: No value is returned.
         """
         await self._broadcast(
             {
