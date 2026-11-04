@@ -119,6 +119,7 @@ if (-not $NoHooks) {
     Write-Host "Installing agent hooks for $Url ..."
     $hookArgs = @("hooks\install.py", "--url", $Url, "--no-check")
     if ($Token) { $hookArgs += @("--token", $Token) }
+    elseif ($Url -match '^http://(localhost|127\.0\.0\.1)(:|/|$)') { $hookArgs += @("--local-config", $config) }
     & $venvPython @hookArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Hook install reported an error. Re-run after fixing agents, or pass -NoHooks."
@@ -136,7 +137,7 @@ Write-Host "  Or open a browser: .\.venv\Scripts\python.exe -m pideck --mock"
 Write-Host "                     then visit http://localhost:8765"
 Write-Host "  Confirm hooks:     .\.venv\Scripts\python.exe hooks\install.py --url $Url --test"
 if ($Url -like "http://localhost*" -or $Url -like "http://127.0.0.1*") {
-    Write-Host "  Local desktop hooks do not need a token."
+    Write-Host "  Local hooks use a separate private event-only credential."
 }
 Write-Host ""
 Write-Host "If Windows reports a missing WebView2 runtime, install the Evergreen package from Microsoft."

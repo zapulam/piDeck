@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 
@@ -32,12 +33,17 @@ def hook_script() -> Path | None:
     return None
 
 
-def launch_prime() -> None:
+def launch_prime(
+    url: str | None = None,
+    ) -> None:
     """
     Post already-open sessions and the latest allowance sample. Failures stay quiet.
 
     The child is killed if it is still running after 30 seconds, so a locked
     Cursor database cannot stall the display.
+
+    Args:
+        url (str | None): Owned local server address, preventing saved remote destination confusion.
 
     Returns:
         None: No value is returned.
@@ -46,7 +52,16 @@ def launch_prime() -> None:
     if script is None:
         return
     try:
-        subprocess.run([sys.executable, str(script), "--prime"], timeout=30, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        executable = Path(sys.executable)
+        if getattr(sys, "frozen", False):
+            executable = executable.with_name("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
+        arguments = [str(executable), str(script), "--prime"]
+        env = dict(os.environ)
+        if url:
+            env["PIDECK_URL"] = url
+        env.pop("PIDECK_TOKEN", None)
+        subprocess.run(arguments, timeout=30, check=False, env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       **({"creationflags": 0x08000000} if os.name == "nt" else {}))
     except (OSError, subprocess.TimeoutExpired):
         return

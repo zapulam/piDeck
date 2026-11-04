@@ -131,6 +131,8 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
   hook_args=(hooks/install.py --url "$URL" --no-check)
   if [[ -n "$TOKEN" ]]; then
     hook_args+=(--token "$TOKEN")
+  elif [[ "$URL" == "http://localhost:8765" || "$URL" == "http://127.0.0.1:8765" ]]; then
+    hook_args+=(--local-config "$ROOT/config.yaml")
   fi
   if .venv/bin/python "${hook_args[@]}"; then
     echo "Hooks installed. Restart Claude Code / Codex / Cursor sessions."
@@ -151,6 +153,6 @@ EOF
 
 case "$URL" in
   http://localhost*|http://127.0.0.1*)
-    echo "  Local desktop hooks do not need a token."
+    echo "  Local hooks use a separate private event-only credential."
     ;;
 esac

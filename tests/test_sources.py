@@ -172,7 +172,7 @@ def test_hook_script_roundtrip(
     assert ev["context_pct"] == 25.0 and ev["event"] == "Stop"
     # SessionEnd skips the transcript read; message is truncated; name override works
     ev = pideck_hook.build_event({"session_id": "s", "hook_event_name": "SessionEnd", "transcript_path": str(tr),
-                                  "message": "m" * 500}, {"PIDECK_NAME": "mine"})
+                                  "message": "m" * 500}, {"PIDECK_NAME": "mine", "PIDECK_SEND_MESSAGES": "1"})
     assert "context_pct" not in ev and ev["name"] == "mine" and len(ev["message"]) == 200
 
 
@@ -280,5 +280,5 @@ def test_assistant_reply_snippets_are_opt_in(
     saved.write_text('{"send_messages": true}')
     assert h.build_event(payload, {"PIDECK_CONFIG": str(saved)}, "codex")["message"] == "secret plans"
     assert "message" not in h.build_event(payload, {"PIDECK_CONFIG": str(saved), "PIDECK_SEND_MESSAGES": "0"}, "codex")
-    # Notification text is short and written by the tool itself, so it is always sent
-    assert h.build_event({"session_id": "t", "hook_event_name": "Notification", "message": "needs you"}, no_conf)["message"] == "needs you"
+    # Notification text follows the same explicit privacy opt-in as assistant replies.
+    assert "message" not in h.build_event({"session_id": "t", "hook_event_name": "Notification", "message": "needs you"}, no_conf)

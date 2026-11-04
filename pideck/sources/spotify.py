@@ -67,7 +67,7 @@ class Spotify:
         Returns:
             bool: True when client ID, client secret, and refresh token are all present.
         """
-        return bool(self.client_id and self.client_secret and self.refresh_token)
+        return bool(self.client_id and self.refresh_token)
 
     async def _token(
         self,
@@ -83,8 +83,8 @@ class Spotify:
         basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
         r = await self._http.post(
             TOKEN_URL,
-            data={"grant_type": "refresh_token", "refresh_token": self.refresh_token},
-            headers={"Authorization": f"Basic {basic}"},
+            data={"grant_type": "refresh_token", "refresh_token": self.refresh_token, "client_id": self.client_id},
+            headers={"Authorization": f"Basic {basic}"} if self.client_secret else {},
         )
         r.raise_for_status()
         j = r.json()
@@ -213,9 +213,11 @@ class Spotify:
         """
         if not self.configured:
             log.warning("Spotify enabled but SPOTIFY_* credentials are missing; skipping")
-            return
         delay = self.poll
         while True:
+            if not self.configured:
+                await asyncio.sleep(1)
+                continue
             try:
                 delay = await self.poll_once()
             except Exception as e:  # network blip etc: keep the loop alive

@@ -70,7 +70,7 @@ def write_checksums(
     directory: Path,
     ) -> Path:
     """
-    Write a sorted checksum manifest covering every release ZIP in a directory.
+    Write a sorted checksum manifest covering source archives, installers, and provenance.
 
     Args:
         directory (Path): Folder containing the source release archive.
@@ -81,9 +81,10 @@ def write_checksums(
     Raises:
         ValueError: No release archives are present.
     """
-    archives = sorted(directory.glob("*.zip"))
+    archives = sorted(path for path in directory.iterdir() if path.is_file()
+                      and path.suffix in {".zip", ".exe", ".dmg", ".json"})
     if not archives:
-        raise ValueError("No release ZIP files were found")
+        raise ValueError("No release assets were found")
     lines = []
     for path in archives:
         with path.open("rb") as stream:

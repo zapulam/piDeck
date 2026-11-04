@@ -245,3 +245,8 @@ button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
   .ctl button.big { width: 58px; height: 58px; }
   .np .title { font-size: 19px; }
 }
+#login { position:absolute; inset:0; z-index:100; display:flex; flex-direction:column; justify-content:center; gap:16px; padding:32px; background:#0b0d12; font-family:monospace; }
+#login[hidden] { display:none; }
+#login input { display:block; width:100%; margin-top:8px; padding:10px; background:#171d28; color:#fff; border:1px solid #536078; border-radius:4px; }
+#login button { padding:12px; }
+#login-error { color:#ffb5a7; }

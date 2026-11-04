@@ -41,8 +41,8 @@ function hashName(s) {
 
 function fruitFor(name = "") {
   const n = name.trim().toLowerCase();
-  if (PINNED[n]) return PINNED[n];
-  if (FRUIT[n]) return n;
+  if (Object.hasOwn(PINNED, n)) return PINNED[n];
+  if (Object.hasOwn(FRUIT, n)) return n;
   return CAST[hashName(n) % CAST.length];
 }
 

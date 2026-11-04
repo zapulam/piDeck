@@ -18,8 +18,8 @@ Two ways in, same script:
 
 Easiest setup: run hooks/install.py, which saves the address in ~/.config/pideck/hook.json
 and registers this script. Environment variables, if set, override that file:
-  PIDECK_URL             default http://localhost:8765   (use the Pi's address, e.g. http://pideck.local:8765)
-  PIDECK_TOKEN           shared secret, if the server has one
+  PIDECK_URL             default http://localhost:8765; remote addresses must use HTTPS
+  PIDECK_HOOK_TOKEN      event-only credential; never use the display administrator token
   PIDECK_CONFIG          path to a different hook.json
   PIDECK_NAME            tile label override (default: the project folder name)
   PIDECK_CONTEXT_WINDOW  tokens for the ctx% estimate (default 200000; Claude Code only)
@@ -35,13 +35,19 @@ from __future__ import annotations
 from typing import Any, Callable, Iterator, Mapping
 
 import json
+import csv
+import io
+import ipaddress
 import math
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
+from functools import lru_cache
+from urllib.parse import urlsplit
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -62,6 +68,142 @@ CURSOR_EVENTS = {
 }
 PRIME_LIMIT = 24
 WORKING_AGE_SECONDS = 120
+
+
+# --- Private files and authenticated transport ---
+
+
+@lru_cache(maxsize=1)
+def windows_user_sid() -> str:
+    """
+    Resolve the current Windows user's SID without relying on localized account names.
+
+    Returns:
+        str: The current user's security identifier.
+    """
+    result = subprocess.run(["whoami.exe", "/user", "/fo", "csv", "/nh"],
+                            capture_output=True, text=True, check=True, creationflags=0x08000000)
+    return next(csv.reader(io.StringIO(result.stdout.strip())))[1]
+
+
+def protect_file(
+    path: Path,
+    ) -> None:
+    """
+    Restrict an existing private file to its owner and the operating system.
+
+    Args:
+        path (Path): Secret or private state file whose permissions must be restricted.
+
+    Returns:
+        None: Permissions are applied, or an exception prevents unsafe persistence.
+    """
+    if os.name == "nt":
+        subprocess.run(["icacls.exe", str(path), "/inheritance:r", "/grant:r",
+                        f"*{windows_user_sid()}:F", "*S-1-5-18:F"],
+                       capture_output=True, check=True, creationflags=0x08000000)
+    else:
+        path.chmod(0o600)
+
+
+def private_write(
+    path: Path,
+    text: str,
+    ) -> None:
+    """
+    Atomically replace a private UTF-8 file, restricting access before writing secrets.
+
+    Args:
+        path (Path): Destination beneath a user-owned configuration directory.
+        text (str): Contents to persist with LF newlines.
+
+    Returns:
+        None: The private destination contains the supplied text.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary = tempfile.mkstemp(prefix=".pideck-", dir=path.parent)
+    staging = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            protect_file(staging)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staging, path)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def validate_transport_url(
+    url: str,
+    ) -> str:
+    """
+    Require HTTPS outside literal loopback addresses and reject URL credentials.
+
+    Args:
+        url (str): Intended server or provider URL, without embedded secrets.
+
+    Returns:
+        str: The unchanged validated URL.
+    """
+    parsed = urlsplit(url)
+    if parsed.username or parsed.password or not parsed.hostname or parsed.fragment:
+        raise ValueError("Use an HTTPS address without credentials or fragments")
+    host = parsed.hostname.lower()
+    try:
+        local = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = host == "localhost"
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and local):
+        raise ValueError("Remote piDeck connections require HTTPS; use an encrypted HTTPS tunnel")
+    return url
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so bearer credentials never reach another endpoint."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+        ) -> None:
+        """
+        Refuse every redirect, including redirects to the same origin.
+
+        Args:
+            req (urllib.request.Request): Original authenticated request.
+            fp (Any): Original response stream.
+            code (int): Redirect status code.
+            msg (str): Response status message.
+            headers (Any): Original response headers.
+            newurl (str): Proposed redirect destination, which is never visited.
+
+        Returns:
+            None: urllib raises its normal HTTPError without forwarding credentials.
+        """
+        return None
+
+
+def safe_open(
+    request: urllib.request.Request,
+    timeout: float = 5,
+    ) -> Any:
+    """
+    Open a validated request with certificate verification and redirects disabled.
+
+    Args:
+        request (urllib.request.Request): Request for its intended HTTPS or loopback endpoint.
+        timeout (float): Maximum blocking socket timeout in seconds.
+
+    Returns:
+        Any: urllib response owned by the caller.
+    """
+    validate_transport_url(request.full_url)
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
 
 
 # --- Usage helpers ---
@@ -343,7 +485,7 @@ def build_event(
         if payload.get("agent_type"):
             ev["name"] = str(payload["agent_type"]).strip()[:64]
     # Notification carries `message`; Codex's Stop carries `last_assistant_message`
-    msg = payload.get("message") or (payload.get("last_assistant_message") if wants_messages(env) else None)
+    msg = (payload.get("message") or payload.get("last_assistant_message")) if wants_messages(env) else None
     if msg:
         ev["message"] = " ".join(str(msg).split())[:200]
     if source == "codex" and ev["event"] != "SessionEnd":
@@ -689,7 +831,7 @@ def load_settings(
     saved = _saved(env)
     return {
         "url": env.get("PIDECK_URL") or saved.get("url") or "http://localhost:8765",
-        "token": env.get("PIDECK_TOKEN") or saved.get("token") or "",
+        "token": env.get("PIDECK_HOOK_TOKEN") or saved.get("token") or "",
     }
 
 
@@ -1150,7 +1292,7 @@ def fetch_cursor_usage(
         dict[str, Any] | None: A usage-only Cursor event, or None when the sign-in or the service is
             unavailable.
     """
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or safe_open
     token = read_cursor_token(env)
     if not token:
         note_fetch(env, "cursor", "no_sign_in")
@@ -1338,7 +1480,7 @@ def fetch_claude_usage(
         method="GET",
     )
     try:
-        with (opener or urllib.request.urlopen)(request, timeout=5) as response:
+        with (opener or safe_open)(request, timeout=5) as response:
             body = json.loads(response.read().decode("utf-8", "ignore"))
     except urllib.error.HTTPError as exc:
         note_fetch(env, "claude", "http_" + str(exc.code))
@@ -1557,11 +1699,18 @@ def post(
     """
     remember_usage(ev, env)
     conf = load_settings(env)
+    ev = dict(ev)
+    if ev.get("cwd") and env.get("PIDECK_SEND_PATHS") != "1":
+        name = str(ev.pop("cwd")).replace("\\", "/").rstrip("/").split("/")[-1]
+        ev.setdefault("name", name[:64])
+    if not wants_messages(env):
+        ev.pop("message", None)
     headers = {"Content-Type": "application/json"}
     if conf["token"]:
         headers["Authorization"] = "Bearer " + conf["token"]
     url = conf["url"].rstrip("/") + "/api/agents/event"
-    urllib.request.urlopen(urllib.request.Request(url, json.dumps(ev).encode(), headers), timeout=2).read()
+    with safe_open(urllib.request.Request(url, json.dumps(ev).encode(), headers), timeout=2) as response:
+        response.read(65536)
 
 
 def main() -> int:

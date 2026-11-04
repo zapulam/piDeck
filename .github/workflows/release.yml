@@ -56,8 +56,14 @@ jobs:
     with:
       ref: ${{ needs.version.outputs.sha }}
 
-  publish:
+  desktop:
     needs: [version, verify]
+    uses: ./.github/workflows/desktop.yml
+    with:
+      ref: ${{ needs.version.outputs.sha }}
+
+  publish:
+    needs: [version, verify, desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -79,7 +85,13 @@ jobs:
         run: |
           mkdir -p dist
           git archive --format=zip --prefix="piDeck-$RELEASE_VERSION/" --output="dist/piDeck-$RELEASE_VERSION-source.zip" HEAD
-          python scripts/release_metadata.py checksums --directory dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: piDeck-*-unsigned
+          path: dist
+          merge-multiple: true
+      - name: Checksum all release downloads
+        run: python scripts/release_metadata.py checksums --directory dist
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         if: ${{ !github.event.repository.private || github.event.repository.owner.type != 'User' }}
         with:

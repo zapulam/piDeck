@@ -8,6 +8,12 @@
 </head>
 <body>
 <div id="stage">
+<form id="login" hidden autocomplete="off">
+  <h2>Connect to piDeck</h2>
+  <p>Enter this server's display token. Agent hook tokens cannot open the display.</p>
+  <label>Display token <input id="display-token" type="password" autocomplete="off" required></label>
+  <button type="submit">Connect</button><p id="login-error" role="status"></p>
+</form>
 <div id="bgart"></div>
 <main id="track" aria-live="polite"></main>
 <nav id="pager"></nav>

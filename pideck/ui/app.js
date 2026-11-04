@@ -463,7 +463,23 @@ function renderSettings(sec) {
     <p class="settings-note">Drag a provider heading to reorder its agents. Use the grip on the usage panel to move it to any edge. Your layout is saved on this display. Provider headings also support the up and down arrow keys.</p>
     <div class="dock-options" aria-label="Usage panel position">${DOCKS.map((dock) =>
       `<button type="button" data-dock="${dock}" aria-pressed="${layout.dock === dock}">${dock}</button>`).join("")}</div>
-    <button type="button" class="reset-layout" data-reset-layout>Reset agent layout</button>`;
+    <button type="button" class="reset-layout" data-reset-layout>Reset agent layout</button>
+    <button type="button" class="reset-layout" data-forget-display>Disconnect this display</button>` +
+    (S.cfg.desktop ? `<h3 class="settings-heading">Desktop setup</h3>
+    <button type="button" class="setting-row" data-desktop="open-config">Open configuration folder</button>
+    <button type="button" class="setting-row" data-desktop="connect-agents">Connect installed agents</button>
+    <button type="button" class="setting-row" data-desktop="spotify-connect">Connect Spotify</button>
+    <button type="button" class="setting-row" id="startup-toggle" data-desktop="startup-on">Start at login: Off</button>
+    <p class="settings-note" id="desktop-status" role="status">Configuration changes take effect after restarting piDeck.</p>` : "");
+  if (S.cfg.desktop) refreshDesktop();
+}
+async function refreshDesktop() {
+  try {
+    const response = await fetch("/api/desktop", authInit());
+    if (!response.ok) return;
+    const state = await response.json(), button = $("#startup-toggle");
+    if (button) { button.dataset.desktop = state.startup ? "startup-off" : "startup-on"; button.textContent = "Start at login: " + (state.startup ? "On" : "Off"); }
+  } catch {}
 }
 function renderSlack(sec) {
   let html = `<h2>Slack <small>${S.slack.length ? `<button class="clear" id="clear">clear</button>` : ""}</small></h2>`;
@@ -489,7 +505,7 @@ function envelope(canvas) {
 }
 function showAlert(a) {
   const el = $("#alert");
-  if (!el.hidden) { alertQueue.push(a); return; }
+  if (!el.hidden) { if (alertQueue.length >= 24) alertQueue.shift(); alertQueue.push(a); return; }
   el.className = a.kind === "agent" ? "agent-" + a.state : a.kind;
   $("#alert-title").textContent = a.title;
   $("#alert-body").textContent = a.body || "";
@@ -523,6 +539,7 @@ function onState(key, value) {
   if (key === "spotify") { S.spotify = value; S.spotifyAt = performance.now(); }
   else if (key === "slack") {
     for (const m of value) if (!S.seenSlack.has(m.id)) { S.seenSlack.add(m.id); if (S.initialized && currentView() !== "slack") S.unread.add(m.id); }
+    if (S.seenSlack.size > 300) S.seenSlack = new Set(value.map((m) => m.id));
     S.slack = value;
   } else {
     S[key] = value;
@@ -537,26 +554,46 @@ function onState(key, value) {
   }
   renderAll();
 }
-// The kiosk on the Pi needs no token. Another device can open  http://PI:8765/?token=...  once; it is
-// remembered in that browser and removed from the address bar.
-const TOKEN = (() => {
-  let t = new URLSearchParams(location.search).get("token") || "";
+// Bootstrap tokens use fragments, then become short-lived HttpOnly cookies.
+// Remove the previous version's persistent credential without reusing it.
+try { localStorage.removeItem("pideck_token"); } catch {}
+let sessionProof = "";
+try { sessionProof = sessionStorage.getItem("pideck_session_proof") || ""; } catch {}
+const authInit = (init = {}) => ({ ...init, credentials: "same-origin", headers: { ...(init.headers || {}), ...(sessionProof ? { "X-piDeck-Session": sessionProof } : {}) } });
+let activeSocket = null, reconnectTimer = null;
+function showLogin(message = "") {
+  $("#login").hidden = false;
+  $("#login-error").textContent = message;
+  $("#display-token").focus();
+}
+async function signIn(token) {
+  if (location.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
+    showLogin("Use the server's HTTPS address before entering a token."); return false;
+  }
   try {
-    if (t) { localStorage.setItem("pideck_token", t); history.replaceState(null, "", location.pathname + location.hash); }
-    else t = localStorage.getItem("pideck_token") || "";
+    const response = await fetch("/api/session", { method: "POST", credentials: "same-origin", headers: { Authorization: "Bearer " + token } });
+    if (response.ok) {
+      sessionProof = (await response.json()).proof;
+      try { sessionStorage.setItem("pideck_session_proof", sessionProof); } catch {}
+      $("#login").hidden = true; return true;
+    }
   } catch {}
-  return t;
-})();
-const authInit = (init = {}) => {
-  const headers = { ...(init.headers || {}) };
-  if (TOKEN) headers.Authorization = "Bearer " + TOKEN;
-  return { ...init, headers };
-};
+  showLogin("Could not connect. Check the display token and server address."); return false;
+}
+$("#login").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = $("#display-token"), token = input.value;
+  input.value = "";
+  if (await signIn(token)) connect();
+});
 
 function connect() {
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" +
-    (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
-  ws.onopen = () => { $("#conn").classList.remove("down"); connect.delay = 500; };
+  clearTimeout(reconnectTimer);
+  if (activeSocket && activeSocket.readyState < 2) return;
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws",
+    ["pideck-v1", ...(sessionProof ? ["pideck-proof." + sessionProof] : [])]);
+  activeSocket = ws;
+  ws.onopen = () => { $("#login").hidden = true; $("#conn").classList.remove("down"); connect.delay = 500; };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.type === "snapshot") {
@@ -565,14 +602,38 @@ function connect() {
     } else if (m.type === "state") onState(m.key, m.value);
     else if (m.type === "alert") showAlert(m.alert);
   };
-  ws.onclose = () => {
+  ws.onclose = async () => {
+    activeSocket = null;
     $("#conn").classList.add("down");
-    setTimeout(connect, connect.delay = Math.min((connect.delay || 500) * 1.6, 8000));
+    try {
+      const response = await fetch("/api/session", authInit());
+      if ([400, 401, 403, 426].includes(response.status)) { showLogin(); return; }
+    } catch {}
+    reconnectTimer = setTimeout(connect, connect.delay = Math.min((connect.delay || 500) * 1.6, 8000));
   };
 }
 
 // ---------- boot ----------
 document.addEventListener("click", async (e) => {
+  const desktopAction = e.target.closest("[data-desktop]")?.dataset.desktop;
+  if (desktopAction) {
+    const status = $("#desktop-status");
+    status.textContent = "Working…";
+    try {
+      const response = await fetch("/api/desktop/" + desktopAction, authInit({ method: "POST" }));
+      const result = await response.json();
+      status.textContent = response.ok ? desktopAction === "spotify-connect" ? result.spotify : "Done" : result.detail || "Could not complete setup";
+      await refreshDesktop();
+    } catch { status.textContent = "Could not reach piDeck"; }
+    return;
+  }
+  if (e.target.closest("[data-forget-display]")) {
+    await fetch("/api/session", authInit({ method: "DELETE" }));
+    sessionProof = "";
+    try { sessionStorage.removeItem("pideck_session_proof"); } catch {}
+    clearTimeout(reconnectTimer); activeSocket?.close();
+    S.spotify = null; S.slack = []; S.agents = []; S.agent_usage = {}; renderAll(); showLogin(); return;
+  }
   if (performance.now() < suppressClickUntil) { e.preventDefault(); return; }
   if (e.target.closest("[data-agent-view-toggle]")) {
     agentView = agentView === "agents" ? "usage" : "agents";
@@ -667,12 +728,26 @@ function applyRotate() {
 }
 
 (async function boot() {
+  const bootstrap = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (bootstrap || new URLSearchParams(location.search).has("token")) history.replaceState(null, "", location.pathname);
+  if (bootstrap) await signIn(bootstrap);
   try { Object.assign(S.cfg, await (await fetch("/api/config")).json()); } catch {}
   applyRotate();
   buildShell();
   renderAll();
   connect();
   setInterval(() => { frame = Math.floor(performance.now() / 450); animateTiles(); }, 100);
+  setInterval(async () => {
+    if (!$("#login").hidden) return;
+    try {
+      const response = await fetch("/api/session", authInit({ method: "POST" }));
+      if (!response.ok) showLogin("Please reconnect this display.");
+      else {
+        sessionProof = (await response.json()).proof;
+        try { sessionStorage.setItem("pideck_session_proof", sessionProof); } catch {}
+      }
+    } catch {}
+  }, 3 * 3600 * 1000);
   setInterval(() => { tickProgress(); tickClock(); }, 500);
   setInterval(() => document.querySelectorAll("[data-ago]").forEach((el) => (el.textContent = ago(+el.dataset.ago))), 15000);
   setInterval(() => { const sec = $("#v-agents"); if (sec) renderAgents(sec); }, 15000);

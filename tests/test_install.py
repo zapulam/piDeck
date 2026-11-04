@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "hooks"))
 import install  # noqa: E402
 import pideck_hook  # noqa: E402
 
-URL = "http://pideck.local:8765"
+URL = "https://pideck.example"
 
 
 def run(

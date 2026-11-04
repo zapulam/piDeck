@@ -1,7 +1,10 @@
 # piDeck configuration. Secrets live in .env, not here.
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 8765
+  # Remote access requires HTTPS, for example through Tailscale Serve.
+  # Only list the literal IP of a reverse proxy you control; never use '*'.
+  trusted_proxy_ips: []
 
 # Order of the swipeable pages. Remove one to hide it.
 # The Settings page can hide pages too; that choice is saved in ui-settings.json, which is gitignored.
