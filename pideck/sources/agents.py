@@ -53,6 +53,7 @@ class AgentEvent(BaseModel):
     event: Optional[str] = Field(None, max_length=64)      # Claude Code hook_event_name
     state: Optional[str] = Field(None, max_length=16)      # explicit override (idle/working/waiting/done/error)
     name: Optional[str] = Field(None, max_length=64)       # tile label; defaults to the cwd folder name
+    detail: Optional[str] = Field(None, max_length=64)     # extra public label, such as a model slug
     cwd: Optional[str] = Field(None, max_length=512)
     agent: Optional[str] = Field(None, max_length=16)      # which tool: claude (default) or codex
     context_pct: Optional[float] = Field(None, ge=0, le=100)
@@ -102,6 +103,7 @@ class AgentRegistry:
         agent = {
             "id": ev.session_id,
             "name": name,
+            "detail": ev.detail or (cur or {}).get("detail"),
             "agent": kind,
             "cwd": ev.cwd or (cur or {}).get("cwd"),
             "state": new_state,

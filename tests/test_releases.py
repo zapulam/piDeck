@@ -135,3 +135,4 @@ def test_desktop_setup_scripts_are_present():
     assert "hooks" in windows and "hooks" in macos
     assert "--config" in windows and "--config" in macos
     assert "Startup" in windows and "--startup" in macos
+    assert "Start menu" in windows and "piDeck.app" in macos

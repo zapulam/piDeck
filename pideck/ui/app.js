@@ -22,14 +22,27 @@ function ago(ts) {
 const mmss = (ms) => { const t = Math.floor(ms / 1000); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
 
 // ---------- shell ----------
+const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.1 7.1 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.22-1.12.53-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.51.41 1.05.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.58-.22 1.12-.53 1.63-.94l2.39.96c.22.1.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`;
 function navViews() {
   const chosen = new Set(S.cfg.views || PAGES);
-  return PAGES.filter((id) => chosen.has(id)).concat(["settings"]);
+  return PAGES.filter((id) => chosen.has(id));
+}
+function toggleSettings() {
+  const panel = $("#settings-panel");
+  panel.hidden = !panel.hidden;
+  $("#settings-btn")?.classList.toggle("on", !panel.hidden);
+  if (!panel.hidden) renderSettings(panel);
 }
 function buildShell() {
   const track = $("#track"), pager = $("#pager");
   const keep = currentView();
   track.innerHTML = ""; pager.innerHTML = "";
+  const gear = document.createElement("button");
+  gear.id = "settings-btn"; gear.type = "button"; gear.setAttribute("aria-label", "Settings");
+  gear.innerHTML = GEAR;
+  pager.appendChild(gear);
+  const pages = document.createElement("div");
+  pages.id = "pager-pages";
   navViews().forEach((v) => {
     const sec = document.createElement("section");
     sec.id = "v-" + v; sec.dataset.view = v;
@@ -37,8 +50,11 @@ function buildShell() {
     const b = document.createElement("button");
     b.dataset.view = v; b.textContent = VIEWS[v].label;
     b.onclick = () => sec.scrollIntoView({ behavior: "smooth", inline: "start" });
-    pager.appendChild(b);
+    pages.appendChild(b);
   });
+  pager.appendChild(pages);
+  const panel = $("#settings-panel");
+  if (panel && !panel.hidden) { gear.classList.add("on"); renderSettings(panel); }
   if (!track.dataset.bound) {
     track.dataset.bound = "1";
     track.addEventListener("scroll", () => { requestAnimationFrame(markPager); settleSoon(); }, { passive: true });
@@ -66,7 +82,7 @@ function settleSoon() {
 function markPager() {
   const track = $("#track");
   const i = Math.round(track.scrollLeft / track.clientWidth);
-  [...$("#pager").children].forEach((b, j) => b.classList.toggle("on", i === j));
+  [...$("#pager-pages").children].forEach((b, j) => b.classList.toggle("on", i === j));
   const cur = track.children[i]?.dataset.view;
   setBg();
   if (cur === "slack" && S.unread.size) { S.unread.clear(); renderAll(); }
@@ -80,6 +96,30 @@ function renderAll() { for (const sec of $("#track").children) VIEWS[sec.dataset
 
 const ORDER = { waiting: 0, error: 1, working: 2, done: 3, idle: 4 };
 const PROVIDERS = { claude: "Claude", codex: "Codex", cursor: "Cursor" };
+const GROUPS = ["cursor", "claude", "codex"];
+function sessionTag(id) {
+  const raw = String(id || "").replace(/^[^:]*:/, "").replace(/[^a-z0-9]/gi, "");
+  return raw.slice(-4).toUpperCase();
+}
+function tileHtml(a, peers) {
+  const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
+  const status = a.state === "working" ? "working" : a.state === "waiting" ? "needs you" : a.state;
+  const same = peers.filter((b) => b.name === a.name);
+  const bits = [];
+  if (a.detail) bits.push(a.detail);
+  if (same.length > 1) bits.push("#" + sessionTag(a.id));
+  const mark = bits.join(" · ");
+  const seed = same.length > 1 ? a.id : a.name;
+  return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%">
+    <canvas width="12" height="12"></canvas>
+    <div class="name">${esc(a.name)}</div>
+    ${mark ? `<div class="tag">${esc(mark)}</div>` : ""}
+    <div class="meta"><b>${status}</b></div>
+    <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"} ${ctx != null ? ctx + "%" : "unavailable"}</div>
+    ${ctx == null ? "" : `<div class="context-track" role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"><div></div></div>`}
+    <div class="meta" data-ago="${a.state_since}">${ago(a.state_since)}</div>
+  </div>`;
+}
 function usageDuration(minutes) {
   return minutes === 10080 ? "Weekly" : minutes % 1440 === 0 ? `${minutes / 1440}d` :
     minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
@@ -110,24 +150,24 @@ function renderUsage(list) {
   return meters.length ? `<div class="usage-dock">${meters.join("")}</div>` : "";
 }
 function renderAgents(sec) {
-  const list = [...S.agents].sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
+  const list = [...S.agents];
   const w = list.filter((a) => a.state === "working").length, n = list.filter((a) => a.state === "waiting").length;
   let html = `<h2>Agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
   if (!list.length) {
     html += `<div class="empty">No agents yet.<br>Start a Claude Code, Codex, or Cursor session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
   } else {
-    html += `<div class="grid">` + list.map((a) => {
-      const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
-      const status = a.state === "working" ? "working" : a.state === "waiting" ? "needs you" : a.state;
-      return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" style="--ctx:${ctx ?? 0}%">
-        <canvas width="12" height="12"></canvas>
-        <div class="name">${esc(a.name)}</div>
-        <div class="meta"><b>${status}</b> · ${PROVIDERS[a.agent] || "Claude"}</div>
-        <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"} ${ctx != null ? ctx + "%" : "unavailable"}</div>
-        ${ctx == null ? "" : `<div class="context-track" role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"><div></div></div>`}
-        <div class="meta" data-ago="${a.state_since}">${ago(a.state_since)}</div>
-      </div>`;
-    }).join("") + `</div>`;
+    const kinds = [...GROUPS];
+    for (const a of list) {
+      const kind = a.agent || "claude";
+      if (!kinds.includes(kind)) kinds.push(kind);
+    }
+    html += kinds.map((kind) => {
+      const items = list.filter((a) => (a.agent || "claude") === kind)
+        .sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
+      if (!items.length) return "";
+      const label = PROVIDERS[kind] || kind;
+      return `<div class="agent-group" data-provider="${esc(kind)}"><h3>${esc(label)}</h3><div class="grid">${items.map((a) => tileHtml(a, items)).join("")}</div></div>`;
+    }).join("");
   }
   sec.classList.add("agents-page");
   sec.innerHTML = `<div class="agents-main">${html}</div>${renderUsage(list)}`;
@@ -135,7 +175,7 @@ function renderAgents(sec) {
 }
 function animateTiles() {
   document.querySelectorAll(".tile").forEach((t) =>
-    drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, kind: t.dataset.kind, frame }));
+    drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, seed: t.dataset.seed, frame }));
 }
 
 let npDom = null;
@@ -184,7 +224,7 @@ function tickClock() {
 
 function renderSettings(sec) {
   sec.innerHTML = `<h2>Settings</h2>
-    <p class="settings-note">Choose which pages appear in the bar below. Settings stays available.</p>` +
+    <p class="settings-note">Choose which pages appear in the bar. The gear in the corner stays available.</p>` +
     PAGES.map((id) => {
       const on = (S.cfg.views || PAGES).includes(id);
       return `<button type="button" class="setting-row" data-page="${id}" aria-pressed="${on}">
@@ -307,6 +347,7 @@ function connect() {
 document.addEventListener("click", async (e) => {
   const done = e.target.closest(".done-card");
   if (done) return dismissDone(+done.dataset.id);
+  if (e.target.closest("#settings-btn")) return toggleSettings();
   if (e.target.closest("#alert")) return hideAlert();
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act) {
@@ -333,7 +374,11 @@ document.addEventListener("keydown", (e) => {
   const t = $("#track");
   if (e.key === "ArrowRight") t.scrollBy({ left: t.clientWidth, behavior: "smooth" });
   if (e.key === "ArrowLeft") t.scrollBy({ left: -t.clientWidth, behavior: "smooth" });
-  if (e.key === "Escape") doneAlerts.length ? dismissDone(doneAlerts[doneAlerts.length - 1].id) : hideAlert();
+  if (e.key === "Escape") {
+    const panel = $("#settings-panel");
+    if (panel && !panel.hidden) { panel.hidden = true; $("#settings-btn")?.classList.remove("on"); return; }
+    doneAlerts.length ? dismissDone(doneAlerts[doneAlerts.length - 1].id) : hideAlert();
+  }
 });
 
 // Rotate the whole UI in software (0/90/180/270). Prefer rotating the display in the OS; this is the

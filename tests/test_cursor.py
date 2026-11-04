@@ -70,6 +70,23 @@ def test_cursor_failures_and_cancellation(
     assert client.post("/api/agents/event", json=event).json()["agent"]["state"] == expected
 
 
+def test_cursor_detail_names_the_model_and_keeps_prompts_off_the_tile(
+        client,
+):
+    """Two chats in one project stay distinct via a public model label, not the prompt."""
+    payload = {"hook_event_name": "beforeSubmitPrompt", "conversation_id": "c",
+               "workspace_roots": ["/work/project"], "model": "composer-2.5", "composer_mode": "ask",
+               "prompt": "private prompt", "user_email": "private@example.com"}
+    event = hook.build_event(payload, {}, "cursor")
+    assert event["detail"] == "ask · composer-2.5"
+    assert "private" not in json.dumps(event)
+    agent = client.post("/api/agents/event", json=event).json()["agent"]
+    assert agent["detail"] == "ask · composer-2.5" and agent["name"] == "project"
+    later = hook.build_event({"hook_event_name": "stop", "conversation_id": "c", "status": "completed"}, {}, "cursor")
+    kept = client.post("/api/agents/event", json=later).json()["agent"]
+    assert kept["detail"] == "ask · composer-2.5" and "private" not in json.dumps(kept)
+
+
 def test_cursor_ignores_unrelated_hooks_and_invalid_context():
     """Missing conversation identity and non-agent hooks cannot create anonymous tiles."""
     assert hook.build_event({"hook_event_name": "workspaceOpen"}, {}, "cursor") is None

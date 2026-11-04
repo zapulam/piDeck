@@ -53,11 +53,11 @@ const mix = (a, b, t) => { const A = hex(a), B = hex(b); return toHex(A.map((v, 
 const dull = (h) => { const [r, g, b] = hex(h); const y = .3 * r + .59 * g + .11 * b; return mix(h, toHex([y, y, y]), .75); };
 
 // frame: integer tick (animations key off it). Draws one fruit into `canvas`.
-// `kind` is accepted for compatibility but the fruit comes from the agent name.
-function drawCreature(canvas, { state, name = "", frame = 0 }) {
+// `seed` picks the fruit when several sessions share a name; otherwise the name does.
+function drawCreature(canvas, { state, name = "", seed, frame = 0 }) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, 12, 12);
-  const f = FRUIT[fruitFor(name)];
+  const f = FRUIT[fruitFor(seed || name)];
   let [R, r, d] = f.c;
   if (state === "done") [R, r, d] = [R, r, d].map((c) => mix(c, "#101820", .25));   // asleep: dimmer
   if (state === "error") [R, r, d] = [R, r, d].map(dull);                          // error: dull colours

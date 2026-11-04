@@ -282,6 +282,28 @@ def build_event(
     return ev
 
 
+def cursor_detail(
+        payload,
+):
+    """A short public label for one Cursor chat, never a prompt or account identity.
+
+    Args:
+        payload: Cursor hook input. Only the composer mode and model slug are read.
+
+    Returns:
+        Ask or edit mode plus the model slug, trimmed to 64 characters, or None.
+    """
+    parts = []
+    mode = payload.get("composer_mode")
+    if isinstance(mode, str) and mode.strip().lower() in {"ask", "edit"}:
+        parts.append(mode.strip().lower())
+    model = payload.get("model")
+    if isinstance(model, str) and model.strip():
+        parts.append(" ".join(model.split())[:48])
+    label = " · ".join(parts)[:64]
+    return label or None
+
+
 def build_cursor_event(
         payload,
         env,
@@ -310,6 +332,9 @@ def build_cursor_event(
     }
     if env.get("PIDECK_NAME"):
         ev["name"] = env["PIDECK_NAME"]
+    detail = cursor_detail(payload)
+    if detail:
+        ev["detail"] = detail
     if event == "UsageUpdate":
         pct = payload.get("context_usage_percent")
         if isinstance(pct, (int, float)) and math.isfinite(pct) and 0 <= pct <= 100:

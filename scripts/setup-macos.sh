@@ -67,6 +67,40 @@ EOF
 chmod +x run-desktop
 echo "Wrote $ROOT/run-desktop"
 
+app="$HOME/Applications/piDeck.app"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "$ROOT/pideck/assets/pideck.png" "$app/Contents/Resources/pideck.png"
+if command -v sips >/dev/null && command -v iconutil >/dev/null; then
+  iconset="$app/Contents/Resources/pideck.iconset"
+  mkdir -p "$iconset"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$ROOT/pideck/assets/pideck.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+  done
+  iconutil -c icns "$iconset" -o "$app/Contents/Resources/pideck.icns" || true
+  rm -rf "$iconset"
+fi
+cat > "$app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>piDeck</string>
+  <key>CFBundleDisplayName</key><string>piDeck</string>
+  <key>CFBundleIdentifier</key><string>com.zapulam.pideck</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>piDeck</string>
+  <key>CFBundleIconFile</key><string>pideck</string>
+</dict></plist>
+EOF
+cat > "$app/Contents/MacOS/piDeck" <<EOF
+#!/bin/bash
+cd "$ROOT"
+exec "$ROOT/.venv/bin/python" -m pideck.desktop --config "$ROOT/config.yaml"
+EOF
+chmod +x "$app/Contents/MacOS/piDeck"
+echo "Applications: $app"
+
 if [[ "$STARTUP" -eq 1 ]]; then
   plist="$HOME/Library/LaunchAgents/com.zapulam.pideck.plist"
   mkdir -p "$HOME/Library/LaunchAgents"
@@ -108,7 +142,7 @@ fi
 cat <<EOF
 
 Setup complete.
-  Start the window:  ./run-desktop
+  Start the window:  open "$HOME/Applications/piDeck.app"
   Demo data:         ./run-desktop --mock
   Or open a browser: .venv/bin/python -m pideck --mock
                      then visit http://localhost:8765
