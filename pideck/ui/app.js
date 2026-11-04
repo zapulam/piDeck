@@ -8,6 +8,23 @@ const VIEWS = {
 };
 const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], agent_usage: {}, seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8, agents_stale_hours: 12 } };
 let frame = 0;
+const motions = new Map();
+const completionSeen = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem("pideck_completion_seen") || "{}");
+    return new Map(Object.entries(saved).filter(([, at]) => Number.isFinite(at)));
+  } catch { return new Map(); }
+})();
+function saveCompletionSeen() {
+  try { localStorage.setItem("pideck_completion_seen", JSON.stringify(Object.fromEntries(completionSeen))); } catch {}
+}
+function acknowledgeSession(id) {
+  const a = S.agents.find((agent) => agent.id === id);
+  if (!a || a.state !== "done") return;
+  completionSeen.set(id, a.state_since);
+  saveCompletionSeen();
+  const sec = $("#v-agents"); if (sec) renderAgents(sec);
+}
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -112,8 +129,11 @@ function tileHtml(a, peers) {
   if (same.length > 1) bits.push("#" + sessionTag(a.id));
   const mark = bits.join(" · ");
   const seed = same.length > 1 ? a.id : a.name;
-  return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%">
-    <canvas width="12" height="12"></canvas>
+  const unseen = a.state === "done" && completionSeen.get(a.id) !== a.state_since;
+  return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%"
+    ${unseen ? `data-unseen="true" role="button" tabindex="0" aria-label="${esc(a.name)} completed. Mark as seen" title="Click to mark this session as seen"` : ""}>
+    ${unseen ? `<span class="completion-badge" role="img" aria-label="Unseen completion">✓</span>` : ""}
+    <div class="sprite"><canvas width="12" height="12"></canvas><span class="thinking" role="img" aria-label="Thinking" hidden><i></i><i></i><i></i></span></div>
     <div class="name">${esc(a.name)}</div>
     ${mark ? `<div class="tag">${esc(mark)}</div>` : ""}
     <div class="meta"><b>${status}</b></div>
@@ -179,8 +199,17 @@ function renderAgents(sec) {
   animateTiles();
 }
 function animateTiles() {
-  document.querySelectorAll(".tile").forEach((t) =>
-    drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, seed: t.dataset.seed, frame }));
+  const now = performance.now();
+  document.querySelectorAll(".tile").forEach((t) => {
+    let motion = motions.get(t.dataset.id);
+    if (!motion || motion.state !== t.dataset.state) {
+      motion = creatureMotion(t.dataset.state, now);
+      motions.set(t.dataset.id, motion);
+    }
+    const pose = stepCreatureMotion(motion, now);
+    $(".thinking", t).hidden = !pose.thinking;
+    drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, seed: t.dataset.seed, frame, ...pose });
+  });
 }
 
 let npDom = null;
@@ -251,59 +280,43 @@ function badges() {
 }
 
 // ---------- alerts ----------
-let alertTimer = null, alertFrame = null, doneSeq = 0;
-const doneAlerts = [];
+let alertTimer = null, alertFrame = null;
+const alertQueue = [];
 function envelope(canvas) {
   const c = canvas.getContext("2d"); c.clearRect(0, 0, 12, 12);
   c.fillStyle = "#ffc86b"; c.fillRect(1, 3, 10, 7);
   c.fillStyle = "#7a4d0e"; for (let i = 0; i < 5; i++) { c.fillRect(1 + i, 3 + i, 1, 1); c.fillRect(10 - i, 3 + i, 1, 1); }
 }
-function renderDoneStack() {
-  const root = $("#done-stack");
-  root.innerHTML = doneAlerts.map((a, i) => {
-    const depth = doneAlerts.length - 1 - i;
-    const rot = ((i % 2 ? 1 : -1) * (4 + depth * 3)) + "deg";
-    const x = (depth * -10) + "px";
-    const y = (depth * -16) + "px";
-    return `<button type="button" class="done-card" data-id="${a.id}" data-name="${esc(a.name)}" data-kind="${a.agent || "claude"}"
-      style="--rot:${rot};--x:${x};--y:${y};z-index:${i + 1}">
-      <canvas width="12" height="12"></canvas>
-      <div><b>${esc(a.title)}</b><span>click to dismiss</span></div>
-    </button>`;
-  }).join("");
-  animateDoneStack();
-}
-function animateDoneStack() {
-  document.querySelectorAll(".done-card").forEach((card) =>
-    drawCreature($("canvas", card), { state: "done", name: card.dataset.name, kind: card.dataset.kind, frame }));
-}
-function dismissDone(id) {
-  const index = doneAlerts.findIndex((a) => a.id === id);
-  if (index >= 0) doneAlerts.splice(index, 1);
-  renderDoneStack();
-}
 function showAlert(a) {
-  if (a.kind === "agent" && a.state === "done") {
-    doneAlerts.push({ ...a, id: ++doneSeq, name: (a.title || "").replace(/ finished$/, "") });
-    renderDoneStack();
-    return;
-  }
   const el = $("#alert");
+  if (!el.hidden) { alertQueue.push(a); return; }
   el.className = a.kind === "agent" ? "agent-" + a.state : a.kind;
   $("#alert-title").textContent = a.title;
   $("#alert-body").textContent = a.body || "";
   const cv = $("#alert-sprite");
   clearInterval(alertFrame);
   if (a.kind === "agent") {
-    let f = 0; const name = a.title.replace(/ (finished|needs you)$/, "");
-    const draw = () => drawCreature(cv, { state: a.state, name, kind: a.agent || "claude", frame: f++ });
+    let f = 0;
+    const name = a.title.replace(/ (finished|needs you)$/, "");
+    const tile = S.agents.find((agent) => agent.id === a.session_id);
+    const peers = S.agents.filter((agent) => agent.agent === tile?.agent && agent.name === tile?.name);
+    const seed = tile && peers.length > 1 ? tile.id : name;
+    const accessory = a.state === "done" ? ACCESSORIES[Math.floor(Math.random() * ACCESSORIES.length)] : undefined;
+    cv.dataset.accessory = accessory || "";
+    cv.dataset.sessionId = a.session_id || "";
+    // Celebrate awake; the card returns to its resting pose after the takeover.
+    const draw = () => drawCreature(cv, { state: a.state === "done" ? "celebrating" : a.state, name, seed, accessory, frame: f++ });
     draw(); alertFrame = setInterval(draw, 450);
   } else envelope(cv);
   el.hidden = false;
   clearTimeout(alertTimer);
-  alertTimer = setTimeout(hideAlert, (a.seconds || S.cfg.alert_seconds) * 1000);
+  const seconds = a.seconds ?? S.cfg.alert_seconds;
+  alertTimer = setTimeout(hideAlert, (a.state === "done" ? Math.min(seconds, 4) : seconds) * 1000);
 }
-function hideAlert() { $("#alert").hidden = true; clearInterval(alertFrame); clearTimeout(alertTimer); }
+function hideAlert() {
+  $("#alert").hidden = true; clearInterval(alertFrame); clearTimeout(alertTimer);
+  if (alertQueue.length) showAlert(alertQueue.shift());
+}
 
 // ---------- data ----------
 function onState(key, value) {
@@ -311,7 +324,17 @@ function onState(key, value) {
   else if (key === "slack") {
     for (const m of value) if (!S.seenSlack.has(m.id)) { S.seenSlack.add(m.id); if (S.initialized && currentView() !== "slack") S.unread.add(m.id); }
     S.slack = value;
-  } else S[key] = value;
+  } else {
+    S[key] = value;
+    if (key === "agents") {
+      const ids = new Set(value.map((a) => a.id));
+      for (const id of motions.keys()) if (!ids.has(id)) motions.delete(id);
+      for (const id of completionSeen.keys()) {
+        if (!value.some((a) => a.id === id && a.state === "done")) completionSeen.delete(id);
+      }
+      saveCompletionSeen();
+    }
+  }
   renderAll();
 }
 // The kiosk on the Pi needs no token. Another device can open  http://PI:8765/?token=...  once; it is
@@ -350,8 +373,8 @@ function connect() {
 
 // ---------- boot ----------
 document.addEventListener("click", async (e) => {
-  const done = e.target.closest(".done-card");
-  if (done) return dismissDone(+done.dataset.id);
+  const tile = e.target.closest('.tile[data-unseen="true"]');
+  if (tile) return acknowledgeSession(tile.dataset.id);
   if (e.target.closest("#settings-btn")) return toggleSettings();
   if (e.target.closest("#alert")) return hideAlert();
   const act = e.target.closest("[data-act]")?.dataset.act;
@@ -376,13 +399,17 @@ document.addEventListener("click", async (e) => {
 });
 function alert403() { showAlert({ kind: "slack", title: "Spotify Premium needed", body: "Playback controls only work on Premium accounts.", seconds: 4 }); }
 document.addEventListener("keydown", (e) => {
+  const tile = e.target.closest('.tile[data-unseen="true"]');
+  if (tile && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault(); acknowledgeSession(tile.dataset.id); return;
+  }
   const t = $("#track");
   if (e.key === "ArrowRight") t.scrollBy({ left: t.clientWidth, behavior: "smooth" });
   if (e.key === "ArrowLeft") t.scrollBy({ left: -t.clientWidth, behavior: "smooth" });
   if (e.key === "Escape") {
     const panel = $("#settings-panel");
     if (panel && !panel.hidden) { panel.hidden = true; $("#settings-btn")?.classList.remove("on"); return; }
-    doneAlerts.length ? dismissDone(doneAlerts[doneAlerts.length - 1].id) : hideAlert();
+    hideAlert();
   }
 });
 
@@ -400,7 +427,7 @@ function applyRotate() {
   buildShell();
   renderAll();
   connect();
-  setInterval(() => { frame++; animateTiles(); animateDoneStack(); }, 450);
+  setInterval(() => { frame = Math.floor(performance.now() / 450); animateTiles(); }, 100);
   setInterval(() => { tickProgress(); tickClock(); }, 500);
   setInterval(() => document.querySelectorAll("[data-ago]").forEach((el) => (el.textContent = ago(+el.dataset.ago))), 15000);
   setInterval(() => { const sec = $("#v-agents"); if (sec) renderAgents(sec); }, 15000);
