@@ -449,6 +449,60 @@ def build_notify_event(payload, env):
     return ev
 
 
+def statusline_context(
+        payload,
+):
+    """Context percent from Claude's status line, including the token fallback.
+
+    Args:
+        payload: Claude Code status-line JSON.
+
+    Returns:
+        A percentage from 0 to 100, or None before the first model response.
+    """
+    window = payload.get("context_window") if isinstance(payload.get("context_window"), dict) else {}
+    pct = window.get("used_percentage")
+    if isinstance(pct, (int, float)) and math.isfinite(pct) and 0 <= pct <= 100:
+        return pct
+    usage = window.get("current_usage") if isinstance(window.get("current_usage"), dict) else None
+    size = window.get("context_window_size")
+    if usage is None or not isinstance(size, (int, float)) or not math.isfinite(size) or size <= 0:
+        return None
+    try:
+        used = sum(float(usage.get(key) or 0) for key in (
+            "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(used) or used < 0:
+        return None
+    return round(min(100.0, used * 100.0 / float(size)), 1)
+
+
+def claude_context_window(
+        path,
+):
+    """Read the context-window size recorded in a Claude transcript.
+
+    Args:
+        path: Session JSONL file. Only the trailing bytes are scanned.
+
+    Returns:
+        The recorded window, or 200000 when the file does not name one.
+    """
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - TAIL_BYTES))
+            raw = stream.read().decode("utf-8", "ignore")
+    except OSError:
+        return 200000
+    match = re.search(r'"(?:context_window_size|contextWindow)"\s*:\s*(\d+)', raw)
+    if not match:
+        return 200000
+    size = int(match.group(1))
+    return size if 1000 <= size <= 2_000_000 else 200000
+
+
 def build_statusline_event(
         payload,
 ):
@@ -460,16 +514,19 @@ def build_statusline_event(
     Returns:
         A usage-only event containing only context, account percentages, and identity.
     """
-    limits = payload.get("rate_limits")
+    limits = payload.get("rate_limits") if isinstance(payload.get("rate_limits"), dict) else {}
     ev = {"session_id": payload.get("session_id") or "unknown", "event": "UsageUpdate", "agent": "claude"}
-    pct = (payload.get("context_window") or {}).get("used_percentage")
-    if isinstance(pct, (int, float)) and math.isfinite(pct) and 0 <= pct <= 100:
+    pct = statusline_context(payload)
+    if pct is not None:
         ev["context_pct"] = pct
-    if isinstance(limits, dict):
-        ev["usage"] = {
-            "primary": usage_window(limits.get("five_hour"), "used_percentage", 300),
-            "secondary": usage_window(limits.get("seven_day"), "used_percentage", 10080),
-        }
+    primary = usage_window(limits.get("five_hour"), "used_percentage", 300)
+    secondary = usage_window(limits.get("seven_day"), "used_percentage", 10080)
+    if primary or secondary:
+        if primary:
+            primary["label"] = "5h"
+        if secondary:
+            secondary["label"] = "Weekly"
+        ev["usage"] = {"primary": primary, "secondary": secondary}
     return ev
 
 
@@ -843,13 +900,17 @@ def discover_sessions(
         if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
             continue
         cwd = fields.get("cwd")
-        events.append({
+        event = {
             "session_id": session_id,
             "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
             "agent": "claude",
             "cwd": cwd,
             "name": Path(cwd).name if cwd else path.parent.name.split("-")[-1],
-        })
+        }
+        pct = context_pct(str(path), claude_context_window(path))
+        if pct is not None:
+            event["context_pct"] = pct
+        events.append(event)
     newest_codex = None
     for modified, path in _recent_files(home / ".codex" / "sessions", "*.jsonl", now, stale_seconds):
         fields = _header_fields(path, ("session_id", "cwd"))
