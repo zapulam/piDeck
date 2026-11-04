@@ -92,6 +92,8 @@ To view an existing Pi server instead, use `python -m pideck.desktop --url "http
 
 Windows uses the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (usually already installed with Edge); macOS uses WebKit. If Windows reports that WebView2 is missing, install Microsoft's Evergreen runtime.
 
+The Windows desktop window uses piDeck's raspberry icon in the taskbar. After updating an older installation, rerun `scripts/setup-windows.ps1` to update desktop dependencies, then restart piDeck. If an existing pinned Python shortcut keeps its old icon, unpin it and pin the piDeck Start menu shortcut instead.
+
 ### 1. On the Raspberry Pi: the server and the screen
 
 ```bash

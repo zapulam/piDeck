@@ -121,6 +121,42 @@ def test_desktop_reports_port_conflicts(
 # --- Native-window orchestration ---
 
 
+@pytest.mark.parametrize("platform, result", [("win32", 0), ("win32", -1), ("linux", 0), ("darwin", 0)])
+def test_taskbar_identity_is_windows_only_and_failure_is_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    platform: str,
+    result: int,
+    ) -> None:
+    """
+    Set the Windows identity while keeping other platforms and failed calls usable.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Helper restoring patched platform and native APIs.
+        caplog (pytest.LogCaptureFixture): Captured warnings from failed native calls.
+        platform (str): Operating system to simulate.
+        result (int): HRESULT returned by the simulated Windows API.
+
+    Returns:
+        None: Assertions confirm the platform guard, identity, and error handling.
+    """
+    from unittest.mock import Mock
+
+    set_app_id = Mock(return_value=result)
+    library = Mock(return_value=SimpleNamespace(SetCurrentProcessExplicitAppUserModelID=set_app_id))
+    monkeypatch.setattr(desktop.sys, "platform", platform)
+    monkeypatch.setattr(desktop.ctypes, "WinDLL", library, raising=False)
+    desktop.configure_taskbar()
+    if platform == "win32":
+        library.assert_called_once_with("shell32")
+        set_app_id.assert_called_once_with("piDeck.Desktop")
+        assert set_app_id.argtypes == [desktop.ctypes.c_wchar_p]
+        assert set_app_id.restype == desktop.ctypes.c_long
+        assert ("Could not set piDeck's taskbar identity" in caplog.text) == (result != 0)
+    else:
+        library.assert_not_called()
+
+
 def test_desktop_remote_window_does_not_start_a_server(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -137,10 +173,12 @@ def test_desktop_remote_window_does_not_start_a_server(
         None: Assertions or fixture setup completed successfully.
     """
     calls = []
+    identity = []
     fake = SimpleNamespace(create_window=lambda *args, **kwargs: calls.append((args, kwargs)),
                            start=lambda **kwargs: calls.append(kwargs))
     monkeypatch.setitem(sys.modules, "webview", fake)
     monkeypatch.setattr(desktop, "data_directory", lambda: tmp_path)
+    monkeypatch.setattr(desktop, "configure_taskbar", lambda: identity.append(len(calls)))
 
     def unexpected_server(
         *args: Any,
@@ -163,6 +201,7 @@ def test_desktop_remote_window_does_not_start_a_server(
     monkeypatch.setattr(desktop, "local_server", unexpected_server)
     url = "https://pideck.example/?token=example"
     desktop.run_desktop(url=url, on_top=True)
+    assert identity == [0]
     assert calls[0][0] == ("piDeck", url)
     assert calls[0][1]["on_top"] is True
     assert calls[0][1]["width"] == 520 and calls[0][1]["height"] == 720
