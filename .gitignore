@@ -10,3 +10,5 @@ __pycache__/
 /test-results/
 /run-desktop
 /run-desktop.cmd
+/piDeck.lnk
+ui-settings.json

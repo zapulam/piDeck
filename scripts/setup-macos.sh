@@ -7,15 +7,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 NO_HOOKS=0
+STARTUP=0
 URL="http://localhost:8765"
 TOKEN=""
 PYTHON_BIN=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/setup-macos.sh [--no-hooks] [--url URL] [--token TOKEN] [--python PATH]
+Usage: scripts/setup-macos.sh [--no-hooks] [--startup] [--url URL] [--token TOKEN] [--python PATH]
 
   --no-hooks     Skip Claude Code / Codex / Cursor hook installation
+  --startup      Open piDeck at login
   --url URL      Server address for hooks (default http://localhost:8765)
   --token TOKEN  Optional PIDECK_TOKEN when pointing hooks at a remote Pi
   --python PATH  Explicit python3 executable (default: python3 on PATH)
@@ -25,6 +27,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-hooks) NO_HOOKS=1; shift ;;
+    --startup) STARTUP=1; shift ;;
     --url) URL="${2:?}"; shift 2 ;;
     --token) TOKEN="${2:?}"; shift 2 ;;
     --python) PYTHON_BIN="${2:?}"; shift 2 ;;
@@ -55,14 +58,39 @@ echo "Installing desktop dependencies ..."
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements-desktop.txt
 
-cat > run-desktop <<'EOF'
+cat > run-desktop <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
-exec .venv/bin/python -m pideck.desktop "$@"
+cd "\$(dirname "\$0")"
+exec .venv/bin/python -m pideck.desktop --config "$ROOT/config.yaml" "\$@"
 EOF
 chmod +x run-desktop
 echo "Wrote $ROOT/run-desktop"
+
+if [[ "$STARTUP" -eq 1 ]]; then
+  plist="$HOME/Library/LaunchAgents/com.zapulam.pideck.plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.zapulam.pideck</string>
+  <key>RunAtLoad</key><true/>
+  <key>WorkingDirectory</key><string>$ROOT</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$ROOT/.venv/bin/python</string>
+    <string>-m</string>
+    <string>pideck.desktop</string>
+    <string>--config</string>
+    <string>$ROOT/config.yaml</string>
+  </array>
+</dict></plist>
+EOF
+  launchctl bootout "gui/$(id -u)/com.zapulam.pideck" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$plist"
+  echo "Opens at login: $plist"
+fi
 
 if [[ "$NO_HOOKS" -eq 0 ]]; then
   echo "Installing agent hooks for $URL ..."

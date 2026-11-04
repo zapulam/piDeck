@@ -133,3 +133,5 @@ def test_desktop_setup_scripts_are_present():
     assert "requirements-desktop.txt" in windows and "run-desktop.cmd" in windows
     assert "requirements-desktop.txt" in macos and "run-desktop" in macos
     assert "hooks" in windows and "hooks" in macos
+    assert "--config" in windows and "--config" in macos
+    assert "Startup" in windows and "--startup" in macos

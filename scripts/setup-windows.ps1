@@ -19,10 +19,14 @@
 
 .PARAMETER Python
   Explicit python.exe path. When omitted, tries py -3, then python.
+
+.PARAMETER Startup
+  Also place a shortcut in the current user's Startup folder so piDeck opens at login.
 #>
 [CmdletBinding()]
 param(
     [switch] $NoHooks,
+    [switch] $Startup,
     [string] $Url = "http://localhost:8765",
     [string] $Token = "",
     [string] $Python = ""
@@ -79,13 +83,31 @@ if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 if ($LASTEXITCODE -ne 0) { throw "Dependency install failed" }
 
 $launcher = Join-Path $Root "run-desktop.cmd"
+$config = Join-Path $Root "config.yaml"
 @(
     "@echo off"
     "setlocal"
     "cd /d ""%~dp0"""
-    """.venv\Scripts\python.exe"" -m pideck.desktop %*"
+    """.venv\Scripts\python.exe"" -m pideck.desktop --config ""$config"" %*"
 ) | Set-Content -Path $launcher -Encoding ASCII
 Write-Host "Wrote $launcher"
+
+$pythonw = Join-Path $Root ".venv\Scripts\pythonw.exe"
+$shortcut = Join-Path $Root "piDeck.lnk"
+$shell = New-Object -ComObject WScript.Shell
+$link = $shell.CreateShortcut($shortcut)
+$link.TargetPath = $pythonw
+$link.Arguments = "-m pideck.desktop --config `"$Root\config.yaml`""
+$link.WorkingDirectory = $Root
+$link.IconLocation = Join-Path $Root "pideck\assets\pideck.ico"
+$link.Description = "piDeck"
+$link.Save()
+Write-Host "Wrote $shortcut"
+if ($Startup) {
+    $startupLink = Join-Path ([Environment]::GetFolderPath("Startup")) "piDeck.lnk"
+    Copy-Item $shortcut $startupLink -Force
+    Write-Host "Opens at login: $startupLink"
+}
 
 if (-not $NoHooks) {
     Write-Host "Installing agent hooks for $Url ..."
@@ -101,7 +123,8 @@ if (-not $NoHooks) {
 
 Write-Host ""
 Write-Host "Setup complete."
-Write-Host "  Start the window:  .\run-desktop.cmd"
+Write-Host "  Start the window:  .\piDeck.lnk   (raspberry icon; pin this)"
+Write-Host "                     .\run-desktop.cmd"
 Write-Host "  Demo data:         .\run-desktop.cmd --mock"
 Write-Host "  Or open a browser: .\.venv\Scripts\python.exe -m pideck --mock"
 Write-Host "                     then visit http://localhost:8765"
