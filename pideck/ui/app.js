@@ -1,4 +1,4 @@
-// piDeck UI: one websocket, three swipeable pages, one alert overlay. No build step, no network deps.
+// piDeck UI: one websocket, swipeable pages, one alert overlay. No build step, no network deps.
 const PAGES = ["agents", "now_playing", "slack"];
 const VIEWS = {
   agents:      { label: "Agents",  render: renderAgents },
@@ -39,25 +39,14 @@ function ago(ts) {
 const mmss = (ms) => { const t = Math.floor(ms / 1000); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
 
 // ---------- shell ----------
-const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.1 7.1 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.22-1.12.53-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.51.41 1.05.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.58-.22 1.12-.53 1.63-.94l2.39.96c.22.1.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`;
 function navViews() {
   const chosen = new Set(S.cfg.views || PAGES);
-  return PAGES.filter((id) => chosen.has(id));
-}
-function toggleSettings() {
-  const panel = $("#settings-panel");
-  panel.hidden = !panel.hidden;
-  $("#settings-btn")?.classList.toggle("on", !panel.hidden);
-  if (!panel.hidden) renderSettings(panel);
+  return [...PAGES.filter((id) => chosen.has(id)), "settings"];
 }
 function buildShell() {
   const track = $("#track"), pager = $("#pager");
   const keep = currentView();
   track.innerHTML = ""; pager.innerHTML = "";
-  const gear = document.createElement("button");
-  gear.id = "settings-btn"; gear.type = "button"; gear.setAttribute("aria-label", "Settings");
-  gear.innerHTML = GEAR;
-  pager.appendChild(gear);
   const pages = document.createElement("div");
   pages.id = "pager-pages";
   navViews().forEach((v) => {
@@ -65,13 +54,13 @@ function buildShell() {
     sec.id = "v-" + v; sec.dataset.view = v;
     track.appendChild(sec);
     const b = document.createElement("button");
+    b.type = "button";
+    if (v === "settings") b.id = "settings-btn";
     b.dataset.view = v; b.textContent = VIEWS[v].label;
     b.onclick = () => sec.scrollIntoView({ behavior: "smooth", inline: "start" });
     pages.appendChild(b);
   });
   pager.appendChild(pages);
-  const panel = $("#settings-panel");
-  if (panel && !panel.hidden) { gear.classList.add("on"); renderSettings(panel); }
   if (!track.dataset.bound) {
     track.dataset.bound = "1";
     track.addEventListener("scroll", () => { requestAnimationFrame(markPager); settleSoon(); }, { passive: true });
@@ -91,7 +80,7 @@ let touching = false, settleTimer = null;
 function settleSoon() {
   clearTimeout(settleTimer);
   settleTimer = setTimeout(() => {
-    const t = $("#track"); if (touching || !t.clientWidth) return;
+    const t = $("#track"); if (touching || drag || !t.clientWidth) return;
     const i = Math.round(t.scrollLeft / t.clientWidth), target = i * t.clientWidth;
     if (Math.abs(t.scrollLeft - target) > 2) t.scrollTo({ left: target, behavior: "smooth" });
   }, 160);
@@ -109,11 +98,27 @@ function currentView() {
 }
 
 // ---------- renderers ----------
-function renderAll() { for (const sec of $("#track").children) VIEWS[sec.dataset.view].render(sec); badges(); }
+function renderAll() {
+  if (drag) { pendingRender = true; return; }
+  for (const sec of $("#track").children) VIEWS[sec.dataset.view].render(sec);
+  badges();
+}
 
 const ORDER = { waiting: 0, error: 1, working: 2, done: 3, idle: 4 };
 const PROVIDERS = { claude: "Claude", codex: "Codex", cursor: "Cursor" };
 const GROUPS = ["cursor", "claude", "codex"];
+const DOCKS = ["top", "bottom", "left", "right"];
+const layout = (() => {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem("pideck_agent_layout") || "{}"); } catch {}
+  return {
+    groups: [...new Set([...(Array.isArray(saved?.groups) ? saved.groups.filter((v) => GROUPS.includes(v)) : []), ...GROUPS])],
+    dock: DOCKS.includes(saved?.dock) ? saved.dock : "bottom",
+  };
+})();
+function saveLayout() {
+  try { localStorage.setItem("pideck_agent_layout", JSON.stringify(layout)); } catch {}
+}
 function sessionTag(id) {
   const raw = String(id || "").replace(/^[^:]*:/, "").replace(/[^a-z0-9]/gi, "");
   return raw.slice(-4).toUpperCase();
@@ -148,38 +153,41 @@ function usageDuration(minutes) {
 }
 function renderUsage(list) {
   const now = Date.now() / 1000;
-  const meters = Object.entries(PROVIDERS).filter(([kind]) =>
+  const meters = layout.groups.map((kind) => [kind, PROVIDERS[kind]]).filter(([kind]) =>
     list.some((a) => (a.agent || "claude") === kind) ||
     now - (S.agent_usage[kind]?.updated_at || 0) < S.cfg.agents_stale_hours * 3600
   ).map(([kind, name]) => {
     const usage = S.agent_usage[kind];
-    const cursorKnown = kind === "cursor" && (Number.isFinite(usage?.primary?.used_pct) || Number.isFinite(usage?.secondary?.used_pct));
-    if (kind === "cursor" && !cursorKnown) return `<div class="usage-meter" data-provider="cursor"><b>Cursor</b>
-      <div class="usage-unavailable">Account limits unavailable</div></div>`;
     const stale = !usage || now - usage.updated_at >= S.cfg.agents_stale_hours * 3600;
-    const bars = ["primary", "secondary"].map((key, i) => {
+    const rings = ["primary", "secondary"].map((key, i) => {
       const win = usage?.[key];
       const expired = win?.resets_at != null && win.resets_at <= now;
       const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.round(win.used_pct) : null;
-      const label = win?.label || (win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h");
+      const label = win?.label || (kind === "cursor" ? (i ? "API" : "Included") : win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h");
       const detail = pct == null ? "—" : pct + "%";
-      return `<div class="usage-label"><span>${label}</span><b>${detail}</b></div>
-        <div class="usage-track ${pct == null ? "unknown" : ""}" ${pct == null ? "" :
-          `role="progressbar" aria-label="${name} ${label} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"`}
-          style="--used:${pct ?? 0}%;--usage-color:var(${pct >= 90 ? "--error" : pct >= 75 ? "--working" : "--done"})"><div></div></div>`;
+      const level = pct == null ? "unknown" : pct < 70 ? "green" : pct <= 90 ? "yellow" : "red";
+      return `<div class="usage-metric" title="${esc(name + " " + label + ": " + (pct == null ? "unavailable" : detail + " used"))}">
+        <div class="usage-donut" data-level="${level}" style="--used:${pct ?? 0}%" ${pct == null ?
+          `role="img" aria-label="${esc(name + " " + label)} usage unavailable"` :
+          `role="progressbar" aria-label="${esc(name + " " + label)} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"`}>
+          <b>${detail}</b></div><span>${esc(label)}</span></div>`;
     }).join("");
-    return `<div class="usage-meter" data-provider="${kind}"><b>${name}</b><div class="usage-pair">${bars}</div></div>`;
+    return `<div class="usage-meter" data-provider="${kind}"><b>${name}</b><div class="usage-pair">${rings}</div></div>`;
   });
-  return meters.length ? `<div class="usage-dock">${meters.join("")}</div>` : "";
+  return meters.length ? `<aside class="usage-dock" data-drag-usage aria-label="Account usage">
+    <button type="button" class="usage-grab" data-drag-usage aria-label="Move usage panel" title="Drag to an edge, or use the arrow keys"><span class="drag-grip" aria-hidden="true"></span></button>
+    ${meters.join("")}</aside>` : "";
 }
 function renderAgents(sec) {
+  if (drag) { pendingRender = true; return; }
+  const scroll = $(".agents-main", sec)?.scrollTop || 0;
   const list = [...S.agents];
   const w = list.filter((a) => a.state === "working").length, n = list.filter((a) => a.state === "waiting").length;
   let html = `<h2>Agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
   if (!list.length) {
     html += `<div class="empty">No agents yet.<br>Start a Claude Code, Codex, or Cursor session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
   } else {
-    const kinds = [...GROUPS];
+    const kinds = [...layout.groups];
     for (const a of list) {
       const kind = a.agent || "claude";
       if (!kinds.includes(kind)) kinds.push(kind);
@@ -191,11 +199,15 @@ function renderAgents(sec) {
           || ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
       if (!items.length) return "";
       const label = PROVIDERS[kind] || kind;
-      return `<div class="agent-group" data-provider="${esc(kind)}"><h3>${esc(label)}</h3><div class="grid">${items.map((a) => tileHtml(a, items)).join("")}</div></div>`;
+      return `<div class="agent-group" data-provider="${esc(kind)}"><h3><button type="button" class="group-handle" data-drag-group="${esc(kind)}"
+        aria-label="Move ${esc(label)} group" title="Drag to reorder, or use the up and down arrow keys"><span class="drag-grip" aria-hidden="true"></span>${esc(label)}</button></h3>
+        <div class="grid">${items.map((a) => tileHtml(a, items)).join("")}</div></div>`;
     }).join("");
   }
   sec.classList.add("agents-page");
+  sec.dataset.dock = layout.dock;
   sec.innerHTML = `<div class="agents-main">${html}</div>${renderUsage(list)}`;
+  $(".agents-main", sec).scrollTop = scroll;
   animateTiles();
 }
 function animateTiles() {
@@ -211,6 +223,117 @@ function animateTiles() {
     drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, seed: t.dataset.seed, frame, ...pose });
   });
 }
+
+// ---------- display layout: pointer dragging and keyboard alternatives ----------
+let drag = null, dragFrame = null, pendingRender = false, suppressClickUntil = 0;
+function stagePoint({ clientX, clientY }) {
+  const stage = $("#stage"), r = stage.getBoundingClientRect();
+  switch (+stage.dataset.rot) {
+    case 90: return { x: clientY - r.top, y: r.right - clientX };
+    case 180: return { x: r.right - clientX, y: r.bottom - clientY };
+    case 270: return { x: r.bottom - clientY, y: clientX - r.left };
+    default: return { x: clientX - r.left, y: clientY - r.top };
+  }
+}
+function stageBounds(el) {
+  const r = el.getBoundingClientRect();
+  const a = stagePoint({ clientX: r.left, clientY: r.top });
+  const b = stagePoint({ clientX: r.right, clientY: r.bottom });
+  return { left: Math.min(a.x, b.x), right: Math.max(a.x, b.x),
+    top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y) };
+}
+function moveGroup(kind, before) {
+  const order = layout.groups.filter((id) => id !== kind);
+  const index = before == null ? order.length : order.indexOf(before);
+  order.splice(index < 0 ? order.length : index, 0, kind);
+  layout.groups = order;
+  saveLayout();
+}
+function updateDrag() {
+  if (!drag?.active) return;
+  const sec = $("#v-agents"), p = stagePoint(drag), r = stageBounds(sec);
+  drag.inside = p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+  drag.preview.style.left = drag.clientX + 12 + "px";
+  drag.preview.style.top = drag.clientY + 12 + "px";
+  sec.querySelectorAll(".drop-before, .drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after"));
+  if (drag.kind === "usage") {
+    const distances = { top: p.y - r.top, bottom: r.bottom - p.y, left: p.x - r.left, right: r.right - p.x };
+    drag.dock = DOCKS.reduce((best, edge) => distances[edge] < distances[best] ? edge : best, DOCKS[0]);
+    sec.querySelectorAll("[data-drop-dock]").forEach((el) => {
+      el.classList.toggle("chosen", drag.inside && el.dataset.dropDock === drag.dock);
+    });
+  } else if (drag.inside) {
+    const groups = [...sec.querySelectorAll(".agent-group")].filter((el) => el.dataset.provider !== drag.kind);
+    const next = groups.find((el) => { const box = stageBounds(el); return p.y < (box.top + box.bottom) / 2; });
+    drag.before = next?.dataset.provider ?? null;
+    (next || groups[groups.length - 1])?.classList.add(next ? "drop-before" : "drop-after");
+  }
+}
+function dragTick() {
+  if (!drag?.active) return;
+  if (drag.kind !== "usage") {
+    const main = $("#v-agents .agents-main"), p = stagePoint(drag), r = stageBounds(main);
+    if (p.x >= r.left && p.x <= r.right && p.y >= r.top - 24 && p.y <= r.bottom + 24) {
+      main.scrollTop += p.y < r.top + 30 ? -12 : p.y > r.bottom - 30 ? 12 : 0;
+    }
+  }
+  updateDrag();
+  dragFrame = requestAnimationFrame(dragTick);
+}
+function finishDrag(cancel = false) {
+  if (!drag) return;
+  updateDrag();
+  const finished = drag;
+  drag = null;
+  cancelAnimationFrame(dragFrame);
+  finished.preview?.remove();
+  $("#v-agents .dock-targets")?.remove();
+  document.querySelectorAll(".dragging, .drop-before, .drop-after").forEach((el) => el.classList.remove("dragging", "drop-before", "drop-after"));
+  if (finished.active) {
+    suppressClickUntil = performance.now() + 250;
+    if (!cancel && finished.inside) {
+      if (finished.kind === "usage") { layout.dock = finished.dock; saveLayout(); }
+      else moveGroup(finished.kind, finished.before);
+    }
+  }
+  try { finished.handle.releasePointerCapture(finished.pointerId); } catch {}
+  if (finished.active || pendingRender) {
+    pendingRender = false;
+    renderAll();
+    if (finished.kind !== "usage") {
+      [...document.querySelectorAll("[data-drag-group]")].find((el) => el.dataset.dragGroup === finished.kind)?.focus({ preventScroll: true });
+    }
+  }
+}
+document.addEventListener("pointerdown", (e) => {
+  const handle = e.target.closest("[data-drag-group], [data-drag-usage]");
+  if (!handle || e.button !== 0 || drag) return;
+  drag = { handle, kind: handle.dataset.dragGroup || "usage", pointerId: e.pointerId,
+    startX: e.clientX, startY: e.clientY, clientX: e.clientX, clientY: e.clientY, active: false };
+  handle.setPointerCapture(e.pointerId);
+});
+document.addEventListener("pointermove", (e) => {
+  if (!drag || drag.pointerId !== e.pointerId) return;
+  drag.clientX = e.clientX; drag.clientY = e.clientY;
+  if (!drag.active && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 5) {
+    drag.active = true;
+    const source = drag.handle.closest(drag.kind === "usage" ? ".usage-dock" : ".agent-group");
+    source.classList.add("dragging");
+    drag.preview = document.createElement("div");
+    drag.preview.className = "drag-preview";
+    drag.preview.textContent = drag.kind === "usage" ? "Account usage" : PROVIDERS[drag.kind] || drag.kind;
+    document.body.appendChild(drag.preview);
+    if (drag.kind === "usage") {
+      $("#v-agents").insertAdjacentHTML("beforeend", `<div class="dock-targets" aria-hidden="true">${DOCKS.map((edge) =>
+        `<span class="dock-target" data-drop-dock="${edge}">${edge}</span>`).join("")}</div>`);
+    }
+    dragTick();
+  }
+  if (drag.active) { e.preventDefault(); updateDrag(); }
+});
+document.addEventListener("pointerup", (e) => { if (drag?.pointerId === e.pointerId) finishDrag(); });
+document.addEventListener("pointercancel", (e) => { if (drag?.pointerId === e.pointerId) finishDrag(true); });
+document.addEventListener("lostpointercapture", (e) => { if (drag?.pointerId === e.pointerId) finishDrag(true); });
 
 let npDom = null;
 function renderNow(sec) {
@@ -257,13 +380,20 @@ function tickClock() {
 }
 
 function renderSettings(sec) {
+  const key = JSON.stringify([S.cfg.views, layout.dock]);
+  if (sec.dataset.selection === key) return;
+  sec.dataset.selection = key;
   sec.innerHTML = `<h2>Settings</h2>
-    <p class="settings-note">Choose which pages appear in the bar. The gear in the corner stays available.</p>` +
+    <p class="settings-note">Choose which pages appear in the bar. Settings always stays available.</p>` +
     PAGES.map((id) => {
       const on = (S.cfg.views || PAGES).includes(id);
       return `<button type="button" class="setting-row" data-page="${id}" aria-pressed="${on}">
         <span>${VIEWS[id].label}</span><b>${on ? "On" : "Off"}</b></button>`;
-    }).join("");
+    }).join("") + `<h3 class="settings-heading">Agent layout</h3>
+    <p class="settings-note">Drag a provider heading to reorder its agents. Use the grip on the usage panel to move it to any edge. Your layout is saved on this display. Provider headings also support the up and down arrow keys.</p>
+    <div class="dock-options" aria-label="Usage panel position">${DOCKS.map((dock) =>
+      `<button type="button" data-dock="${dock}" aria-pressed="${layout.dock === dock}">${dock}</button>`).join("")}</div>
+    <button type="button" class="reset-layout" data-reset-layout>Reset agent layout</button>`;
 }
 function renderSlack(sec) {
   let html = `<h2>Slack <small>${S.slack.length ? `<button class="clear" id="clear">clear</button>` : ""}</small></h2>`;
@@ -373,9 +503,14 @@ function connect() {
 
 // ---------- boot ----------
 document.addEventListener("click", async (e) => {
+  if (performance.now() < suppressClickUntil) { e.preventDefault(); return; }
+  const dock = e.target.closest("button[data-dock]")?.dataset.dock;
+  if (dock) { layout.dock = dock; saveLayout(); renderAll(); return; }
+  if (e.target.closest("[data-reset-layout]")) {
+    layout.groups = [...GROUPS]; layout.dock = "bottom"; saveLayout(); renderAll(); return;
+  }
   const tile = e.target.closest('.tile[data-unseen="true"]');
   if (tile) return acknowledgeSession(tile.dataset.id);
-  if (e.target.closest("#settings-btn")) return toggleSettings();
   if (e.target.closest("#alert")) return hideAlert();
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act) {
@@ -399,6 +534,24 @@ document.addEventListener("click", async (e) => {
 });
 function alert403() { showAlert({ kind: "slack", title: "Spotify Premium needed", body: "Playback controls only work on Premium accounts.", seconds: 4 }); }
 document.addEventListener("keydown", (e) => {
+  if (drag && e.key === "Escape") { e.preventDefault(); finishDrag(true); return; }
+  const group = e.target.closest("[data-drag-group]");
+  if (group && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    e.preventDefault();
+    const shown = [...document.querySelectorAll(".agent-group")].map((el) => el.dataset.provider);
+    const i = shown.indexOf(group.dataset.dragGroup);
+    if (e.key === "ArrowUp" && i > 0) moveGroup(shown[i], shown[i - 1]);
+    if (e.key === "ArrowDown" && i < shown.length - 1) moveGroup(shown[i], shown[i + 2] ?? null);
+    renderAll();
+    [...document.querySelectorAll("[data-drag-group]")].find((el) => el.dataset.dragGroup === group.dataset.dragGroup)?.focus();
+    return;
+  }
+  if (e.target.closest("[data-drag-usage]") && e.key.startsWith("Arrow")) {
+    e.preventDefault();
+    const edge = { ArrowUp: "top", ArrowDown: "bottom", ArrowLeft: "left", ArrowRight: "right" }[e.key];
+    if (edge) { layout.dock = edge; saveLayout(); renderAll(); $(".usage-grab")?.focus(); }
+    return;
+  }
   const tile = e.target.closest('.tile[data-unseen="true"]');
   if (tile && (e.key === "Enter" || e.key === " ")) {
     e.preventDefault(); acknowledgeSession(tile.dataset.id); return;
@@ -407,8 +560,6 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") t.scrollBy({ left: t.clientWidth, behavior: "smooth" });
   if (e.key === "ArrowLeft") t.scrollBy({ left: -t.clientWidth, behavior: "smooth" });
   if (e.key === "Escape") {
-    const panel = $("#settings-panel");
-    if (panel && !panel.hidden) { panel.hidden = true; $("#settings-btn")?.classList.remove("on"); return; }
     hideAlert();
   }
 });

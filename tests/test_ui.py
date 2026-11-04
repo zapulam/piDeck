@@ -26,6 +26,46 @@ def static_demo(
     monkeypatch.setattr(mock, "run", lambda hub, agents, slack, lively=True: mock.seed(hub, agents, slack))
 
 
+"""# --- Pointer interaction helpers ---"""
+
+
+def drag_usage_panel(
+        page,
+        edge,
+        rotate=0,
+        on_drag=None,
+):
+    """Drag the usage grip to a visible screen edge and check its highlighted target.
+
+    Args:
+        page: Browser page showing the Agents view.
+        edge: Desired logical docking edge.
+        rotate: Software screen rotation used by this test, either zero or 90.
+        on_drag: Optional callback invoked while the pointer is captured.
+    """
+    grip = page.locator(".usage-grab")
+    grip.scroll_into_view_if_needed()
+    source = grip.bounding_box()
+    panel = page.locator("#v-agents").bounding_box()
+    screen_edge = {"top": "right", "bottom": "left", "left": "top", "right": "bottom"}[edge] if rotate == 90 else edge
+    x, y = panel["x"] + panel["width"] / 2, panel["y"] + panel["height"] / 2
+    if screen_edge == "left":
+        x = panel["x"] + 10
+    elif screen_edge == "right":
+        x = panel["x"] + panel["width"] - 10
+    elif screen_edge == "top":
+        y = panel["y"] + 10
+    else:
+        y = panel["y"] + panel["height"] - 10
+    page.mouse.move(source["x"] + source["width"] / 2, source["y"] + source["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(x, y, steps=12)
+    page.locator(f'.dock-target.chosen[data-drop-dock="{edge}"]').wait_for()
+    if on_drag:
+        on_drag()
+    page.mouse.up()
+
+
 """# --- Browser integration ---"""
 
 
@@ -96,14 +136,17 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     page.keyboard.press("Enter")
                     tile.locator(".completion-badge").wait_for(state="detached")
                     page.locator("#settings-btn").click()
-                    page.locator('#settings-panel [data-page="slack"][aria-pressed="true"]').click()
+                    page.wait_for_function('() => currentView() === "settings"')
+                    assert page.locator("#settings-panel").count() == 0
+                    page.locator('#v-settings [data-page="slack"][aria-pressed="true"]').click()
                     page.locator('#pager button[data-view="slack"]').wait_for(state="detached")
                     page.reload()
                     page.wait_for_selector("#settings-btn")
                     assert page.locator('#pager button[data-view="slack"]').count() == 0
                     page.locator("#settings-btn").click()
-                    page.locator('#settings-panel [data-page="slack"]').click()
+                    page.locator('#v-settings [data-page="slack"]').click()
                     page.locator('#pager button[data-view="slack"]').wait_for()
+                    page.locator('#pager button[data-view="agents"]').click()
                 assert page.locator("#v-agents").evaluate("el => el.scrollWidth <= el.clientWidth")
                 with httpx.Client(base_url=url, trust_env=False) as client:
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "state": "working", "agent": "cursor"})
@@ -255,5 +298,226 @@ def test_completion_queue_and_same_name_sessions_in_chromium(
                     assert page.locator('.tile[data-id="same:222"] .completion-badge').count() == 1
                     client.post("api/agents/event", json={"session_id": "same:222", "state": "working"})
                     page.locator('.tile[data-id="same:222"] .completion-badge').wait_for(state="detached")
+            finally:
+                browser.close()
+
+
+"""# --- Custom agent layouts and compact usage ---"""
+
+
+@pytest.mark.parametrize("width,height,rotate", [(800, 480, 0), (360, 400, 0), (800, 480, 90)])
+def test_usage_panel_dragging_and_persistence(
+        tmp_path,
+        width,
+        height,
+        rotate,
+):
+    """Dock on each edge with real pointer gestures, including a rotated display.
+
+    Args:
+        tmp_path: Isolated server configuration directory.
+        width: Browser viewport width.
+        height: Browser viewport height.
+        rotate: Software stage rotation in degrees.
+    """
+    from playwright.sync_api import expect, sync_playwright
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": width, "height": height})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            try:
+                page.goto(url + f"?rotate={rotate}")
+                page.wait_for_selector(".usage-grab")
+                with httpx.Client(base_url=url, trust_env=False) as client:
+                    for edge in ("top", "left", "right", "bottom"):
+                        drag_usage_panel(page, edge, rotate, on_drag=lambda: client.post("api/agents/event", json={
+                            "session_id": "during-drag", "state": "working", "agent": "codex",
+                        }).raise_for_status())
+                        expect(page.locator("#v-agents")).to_have_attribute("data-dock", edge)
+                        assert page.locator('[data-id="during-drag"]').count() == 1
+                        geometry = page.locator("#v-agents").evaluate("""el => {
+                            const u = el.querySelector('.usage-dock'), m = el.querySelector('.agents-main');
+                            return {ux:u.offsetLeft, uy:u.offsetTop, uw:u.offsetWidth, uh:u.offsetHeight,
+                                mx:m.offsetLeft, my:m.offsetTop, mw:m.offsetWidth, mh:m.offsetHeight,
+                                fits:el.scrollWidth <= el.clientWidth && m.scrollWidth <= m.clientWidth};
+                        }""")
+                        assert geometry["fits"]
+                        if edge == "top":
+                            assert geometry["uy"] + geometry["uh"] <= geometry["my"]
+                        elif edge == "bottom":
+                            assert geometry["my"] + geometry["mh"] <= geometry["uy"]
+                        elif edge == "left":
+                            assert geometry["ux"] + geometry["uw"] <= geometry["mx"]
+                        else:
+                            assert geometry["mx"] + geometry["mw"] <= geometry["ux"]
+                        page.reload()
+                        expect(page.locator("#v-agents")).to_have_attribute("data-dock", edge)
+                assert not errors
+            finally:
+                screenshots = Path("test-results/browser")
+                screenshots.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(screenshots / f"usage-dock-{width}x{height}-rot{rotate}.png"))
+                browser.close()
+
+
+def test_provider_group_dragging_and_keyboard_order(
+        tmp_path,
+):
+    """Move an offscreen group to the top, persist it, and support keyboard/cancel.
+
+    Args:
+        tmp_path: Isolated server configuration directory.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 800, "height": 480})
+            try:
+                page.goto(url)
+                codex = page.locator('[data-drag-group="codex"]')
+                codex.wait_for()
+                codex.scroll_into_view_if_needed()
+                source, main = codex.bounding_box(), page.locator(".agents-main").bounding_box()
+                page.mouse.move(source["x"] + 20, source["y"] + source["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(main["x"] + 100, main["y"] + 8, steps=15)
+                page.wait_for_function('() => document.querySelector(".agents-main").scrollTop <= 1')
+                page.mouse.up()
+                assert page.locator(".agent-group").evaluate_all("els => els.map(el => el.dataset.provider)") == ["codex", "cursor", "claude"]
+                codex.focus()
+                page.keyboard.press("ArrowDown")
+                assert page.locator(".agent-group").first.get_attribute("data-provider") == "cursor"
+                page.keyboard.press("ArrowUp")
+                assert page.locator(".agent-group").first.get_attribute("data-provider") == "codex"
+                page.reload()
+                codex.wait_for()
+                assert page.locator(".agent-group").first.get_attribute("data-provider") == "codex"
+                source = codex.bounding_box()
+                page.mouse.move(source["x"] + 20, source["y"] + 10)
+                page.mouse.down()
+                page.mouse.move(source["x"] + 30, source["y"] + 90, steps=10)
+                page.locator(".drag-preview").wait_for()
+                page.keyboard.press("Escape")
+                page.mouse.up()
+                assert page.locator(".drag-preview").count() == 0
+                assert page.locator(".agent-group").first.get_attribute("data-provider") == "codex"
+            finally:
+                browser.close()
+
+
+def test_usage_panel_touch_drag_and_keyboard_docking(
+        tmp_path,
+):
+    """Use a real touch gesture to dock usage without swiping to another page.
+
+    Args:
+        tmp_path: Isolated server configuration directory.
+    """
+    from playwright.sync_api import expect, sync_playwright
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            context = browser.new_context(viewport={"width": 360, "height": 720}, has_touch=True)
+            page = context.new_page()
+            try:
+                page.goto(url)
+                grip = page.locator(".usage-grab")
+                grip.wait_for()
+                source, panel = grip.bounding_box(), page.locator("#v-agents").bounding_box()
+                start = {"x": source["x"] + source["width"] / 2, "y": source["y"] + source["height"] / 2}
+                end = {"x": panel["x"] + 10, "y": panel["y"] + panel["height"] / 2}
+                session = context.new_cdp_session(page)
+                session.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [start]})
+                for step in range(1, 13):
+                    point = {axis: start[axis] + (end[axis] - start[axis]) * step / 12 for axis in ("x", "y")}
+                    session.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [point]})
+                session.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+                expect(page.locator("#v-agents")).to_have_attribute("data-dock", "left")
+                assert page.evaluate("currentView()") == "agents"
+                page.locator(".usage-grab").focus()
+                page.keyboard.press("ArrowRight")
+                expect(page.locator("#v-agents")).to_have_attribute("data-dock", "right")
+                page.keyboard.press("ArrowUp")
+                expect(page.locator("#v-agents")).to_have_attribute("data-dock", "top")
+                assert page.evaluate("currentView()") == "agents"
+            finally:
+                browser.close()
+
+
+def test_usage_donut_thresholds_and_unknown_values(
+        tmp_path,
+):
+    """Color percentages at 70/90 boundaries and distinguish unavailable from zero.
+
+    Args:
+        tmp_path: Isolated server configuration directory.
+    """
+    from playwright.sync_api import expect, sync_playwright
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            try:
+                page.goto(url)
+                donut = page.locator('.usage-meter[data-provider="codex"] .usage-donut').first
+                donut.wait_for()
+                with httpx.Client(base_url=url, trust_env=False) as client:
+                    for pct, level in [(0, "green"), (69, "green"), (70, "yellow"), (90, "yellow"), (91, "red"), (100, "red")]:
+                        client.post("api/agents/event", json={
+                            "session_id": "usage:codex", "event": "UsageUpdate", "agent": "codex",
+                            "usage": {"primary": {"used_pct": pct, "window_minutes": 300}},
+                        }).raise_for_status()
+                        expect(donut).to_have_attribute("aria-valuenow", str(pct))
+                        expect(donut).to_have_attribute("data-level", level)
+                        expect(donut).to_have_text(f"{pct}%")
+                        assert "conic-gradient" in donut.evaluate("el => getComputedStyle(el).backgroundImage")
+                    client.post("api/agents/event", json={
+                        "session_id": "usage:codex", "event": "UsageUpdate", "agent": "codex",
+                        "usage": {"primary": {"used_pct": 40, "window_minutes": 300, "resets_at": 1}},
+                    }).raise_for_status()
+                    expect(donut).to_have_attribute("data-level", "unknown")
+                    expect(donut).to_have_text("—")
+                    assert donut.get_attribute("aria-valuenow") is None
+            finally:
+                browser.close()
+
+
+def test_settings_page_is_always_available(
+        tmp_path,
+):
+    """Keep the full Settings page accessible when every other page is switched off.
+
+    Args:
+        tmp_path: Isolated server configuration directory.
+    """
+    from playwright.sync_api import expect, sync_playwright
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 360, "height": 400})
+            try:
+                page.goto(url)
+                page.locator("#settings-btn").click()
+                page.wait_for_function('() => currentView() === "settings"')
+                assert page.locator("#settings-panel").count() == 0
+                for name in ("agents", "now_playing", "slack"):
+                    page.locator(f'#v-settings [data-page="{name}"]').click()
+                    expect(page.locator(f'#v-settings [data-page="{name}"]')).to_have_attribute("aria-pressed", "false")
+                assert page.locator("#pager button").count() == 1
+                assert page.locator("#pager button").text_content() == "Settings"
+                page.reload()
+                page.wait_for_selector("#v-settings")
+                assert page.locator("#pager button").count() == 1
+                page.locator('#v-settings [data-page="agents"]').click()
+                page.locator('#pager button[data-view="agents"]').click()
+                page.wait_for_selector(".usage-grab")
             finally:
                 browser.close()

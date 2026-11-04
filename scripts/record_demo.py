@@ -107,7 +107,7 @@ def encode_gif(
 def record(
         destination,
 ):
-    """Record provider groups, animations, completion acknowledgment, and other pages.
+    """Record agents, a completed turn, Spotify, and Slack without opening Settings.
 
     Args:
         destination: GIF output path.
@@ -133,21 +133,27 @@ def record(
                         {"session_id": "demo-explore", "name": "Explore", "parent_id": "mock-0", "state": "idle", "agent": "claude"},
                         {"session_id": "usage:cursor", "event": "UsageUpdate", "agent": "cursor", "usage": {
                             "primary": {"used_pct": 34, "window_minutes": 43200, "label": "Included"},
-                            "secondary": {"used_pct": 6, "window_minutes": 43200, "label": "API"}}},
+                            "secondary": {"used_pct": 94, "window_minutes": 43200, "label": "API"}}},
+                        {"session_id": "usage:claude", "event": "UsageUpdate", "agent": "claude", "usage": {
+                            "primary": {"used_pct": 37, "window_minutes": 300},
+                            "secondary": {"used_pct": 84, "window_minutes": 10080}}},
                     ]:
                         client.post("api/agents/event", json=event).raise_for_status()
                     page.locator('.usage-meter[data-provider="cursor"]', has_text="Included").wait_for()
-                    capture(page, frames, 4)
+                    page.evaluate("""() => {
+                        layout.groups = ['codex', 'claude', 'cursor']; saveLayout(); renderAll();
+                    }""")
+                    capture(page, frames, 3)
                     page.evaluate("""() => {
                         const main = document.querySelector('.agents-main');
                         main.scrollTo({top: document.querySelector('[data-provider="claude"].agent-group').offsetTop - main.offsetTop,
                             behavior: 'smooth'});
                     }""")
-                    capture(page, frames, 4)
+                    capture(page, frames, 3)
                     page.evaluate("""() => {
                         const m = motions.get('mock-0'); m.thinkAt = 0; animateTiles();
                     }""")
-                    capture(page, frames, 2)
+                    capture(page, frames, 1.5)
                     client.post("api/agents/event", json={"session_id": "mock-0", "state": "done"}).raise_for_status()
                     page.locator("#alert.agent-done").wait_for()
                     capture(page, frames, 3)
@@ -155,21 +161,12 @@ def record(
                     tile = page.locator('.tile[data-id="mock-0"]')
                     tile.locator(".completion-badge").wait_for()
                     capture(page, frames, 1.5)
-                    tile.click()
-                    assert tile.locator(".completion-badge").count() == 0
-                    capture(page, frames, 1)
-                    page.evaluate("document.querySelector('.agents-main').scrollTo({top:10000,behavior:'smooth'})")
-                    capture(page, frames, 2.5)
-                    page.locator("#settings-btn").click()
-                    capture(page, frames, 2)
-                    page.locator("#settings-btn").click()
                     page.locator('#pager button[data-view="now_playing"]').click()
-                    capture(page, frames, 3)
+                    capture(page, frames, 4)
+                    assert page.evaluate("currentView()") == "now_playing"
                     page.locator('#pager button[data-view="slack"]').click()
-                    capture(page, frames, 3)
-                    page.locator('#pager button[data-view="agents"]').click()
-                    page.evaluate("document.querySelector('.agents-main').scrollTo({top:0,behavior:'smooth'})")
-                    capture(page, frames, 2)
+                    capture(page, frames, 4)
+                    assert page.evaluate("currentView()") == "slack"
                 browser.close()
     assert not errors, errors
     encode_gif(frames, destination)
