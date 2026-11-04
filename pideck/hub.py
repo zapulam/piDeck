@@ -47,9 +47,27 @@ class Hub:
         await self._broadcast({"type": "state", "key": key, "value": value})
 
     async def alert(
-        self, kind: str, title: str, body: str = "", *, state: str = "", agent: str = "", seconds: float = 8
+            self,
+            kind: str,
+            title: str,
+            body: str = "",
+            *,
+            state: str = "",
+            agent: str = "",
+            seconds: float = 8,
+            session_id: str = "",
     ) -> None:
-        """Transient takeover. `kind` is 'agent' or 'slack'; `state` styles agent alerts."""
+        """Broadcast a transient takeover to connected displays.
+
+        Args:
+            kind: Alert source, either agent or Slack.
+            title: Main text shown in the takeover.
+            body: Optional supporting message.
+            state: Agent state used to style the takeover.
+            agent: Provider associated with an agent alert.
+            seconds: Requested display duration in seconds.
+            session_id: Exact session owning an agent alert, even for duplicate names.
+        """
         await self._broadcast(
             {
                 "type": "alert",
@@ -60,6 +78,7 @@ class Hub:
                     "body": body,
                     "state": state,
                     "agent": agent,
+                    "session_id": session_id,
                     "seconds": seconds,
                     "at": time.time(),
                 },

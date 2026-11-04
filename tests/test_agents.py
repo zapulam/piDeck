@@ -8,7 +8,14 @@ def post(client, **kw):
     return client.post("/api/agents/event", json=kw)
 
 
-def test_lifecycle_and_alerts(client):
+def test_lifecycle_and_alerts(
+        client,
+):
+    """Publish lifecycle states and alerts that identify their owning session.
+
+    Args:
+        client: Authenticated test client connected to an isolated application.
+    """
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json()["type"] == "snapshot"
 
@@ -29,7 +36,9 @@ def test_lifecycle_and_alerts(client):
         post(client, session_id="s1", event="Stop", context_pct=42)
         a = ws.receive_json()["value"][0]
         assert (a["state"], a["context_pct"]) == ("done", 42)
-        assert ws.receive_json()["alert"]["title"] == "api-gateway finished"
+        alert = ws.receive_json()["alert"]
+        assert alert["title"] == "api-gateway finished"
+        assert alert["session_id"] == "s1"
 
         post(client, session_id="s1", event="SessionEnd")
         assert ws.receive_json()["value"] == []

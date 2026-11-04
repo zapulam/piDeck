@@ -73,7 +73,21 @@ class AgentRegistry:
         self.alert_seconds = alert_seconds
         self.agents: dict[str, dict] = {}
 
-    async def handle(self, ev: AgentEvent) -> dict | None:
+    async def handle(
+            self,
+            ev: AgentEvent,
+    ) -> dict | None:
+        """Apply a lifecycle or usage event and publish any resulting state and alert.
+
+        Args:
+            ev: Validated hook event identifying a session and its update.
+
+        Returns:
+            The updated session, or None for removed, ignored, or usage-only events.
+
+        Raises:
+            ValueError: An explicit state is unknown or the event has no state or type.
+        """
         now = time.time()
         if ev.event == "UsageUpdate":
             await self._update_usage(ev, now)
@@ -128,7 +142,8 @@ class AgentRegistry:
                 return agent  # a fresh session settling isn't news
             title = f"{name} finished" if new_state == "done" else f"{name} needs you"
             await self.hub.alert(
-                "agent", title, agent["message"] or "", state=new_state, agent=kind, seconds=self.alert_seconds
+                "agent", title, agent["message"] or "", state=new_state, agent=kind,
+                seconds=self.alert_seconds, session_id=ev.session_id,
             )
         return agent
 

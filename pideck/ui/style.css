@@ -5,7 +5,7 @@
   --line: #262e40;
   --text: #e8ecf5;
   --dim: #8b96ad;
-  --working: #ff9a3c;
+  --working: #579dff;
   --waiting: #ff4d8d;
   --done: #5fd3b0;
   --idle: #7d8bab;
@@ -45,7 +45,7 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 #settings-panel { position: absolute; z-index: 6; left: 12px; right: 12px; bottom: 52px; max-height: min(70%, 420px); overflow: auto;
   background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 8px; box-shadow: 0 16px 40px rgba(0,0,0,.45); }
 #settings-panel[hidden] { display: none; }
-button, #alert, .done-card { cursor: pointer; }
+button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
 #pager button.on { color: var(--text); background: rgba(255,255,255,.1); }
 #pager .badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--waiting);
   color: #fff; font-size: 10px; line-height: 16px; text-align: center; padding: 0 4px; }
@@ -76,6 +76,18 @@ button, #alert, .done-card { cursor: pointer; }
 .context-track { width: 85%; height: 3px; }
 .context-track > div { height: 100%; width: var(--ctx); background: var(--c); }
 .tile canvas { width: 60px; height: 60px; image-rendering: pixelated; }
+.sprite { position: relative; width: 60px; height: 60px; flex: none; }
+.thinking { position: absolute; top: -9px; right: -15px; display: flex; align-items: center; gap: 3px;
+  padding: 6px; border: 1px solid var(--working); border-radius: 9px; background: var(--panel-2); }
+.thinking[hidden] { display: none; }
+.thinking::after { content: ""; position: absolute; bottom: -4px; left: 5px; width: 4px; height: 4px; background: var(--working); border-radius: 50%; }
+.thinking i { width: 3px; height: 3px; border-radius: 50%; background: var(--working); animation: thought-dot .9s ease-in-out infinite; }
+.thinking i:nth-child(2) { animation-delay: .15s; }
+.thinking i:nth-child(3) { animation-delay: .3s; }
+.completion-badge { position: absolute; top: 7px; right: 7px; display: grid; place-items: center; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--done); color: var(--bg); font-size: 14px; font-weight: 800; }
+.tile:focus-visible { outline: 2px solid var(--text); outline-offset: -5px; }
+@keyframes thought-dot { 50% { opacity: .3; transform: translateY(-2px); } }
 .tile .name { font-size: 13px; font-weight: 700; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile .meta { font-size: 11px; color: var(--dim); white-space: nowrap; }
 .tile .meta b { color: var(--c); font-weight: 600; }
@@ -137,18 +149,11 @@ button, #alert, .done-card { cursor: pointer; }
 #alert.agent-done { background: radial-gradient(circle at 50% 40%, #0e3b31, #0b0d12 70%); }
 #alert.slack { background: radial-gradient(circle at 50% 40%, #3a2a0e, #0b0d12 70%); }
 #alert canvas { width: 168px; height: 168px; image-rendering: pixelated; }
+#alert.agent-done canvas { animation: hop .55s ease-in-out infinite; }
 #alert-text { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 92%; }
 #alert-title { font-size: 26px; font-weight: 800; }
 #alert-body { font-size: 17px; color: #c3cbdc; max-width: 90%; line-height: 1.4; }
 #alert-hint { position: absolute; bottom: 26px; font-size: 11px; color: var(--dim); letter-spacing: .15em; text-transform: uppercase; }
-#done-stack { position: absolute; z-index: 11; right: 18px; bottom: 58px; width: 230px; height: 210px; pointer-events: none; }
-#done-stack:empty { display: none; }
-.done-card { position: absolute; right: 0; bottom: 0; width: 196px; pointer-events: auto; display: flex; gap: 8px; align-items: center;
-  padding: 10px; border: 2px solid var(--done); border-radius: 14px; background: #10241e; color: #fff;
-  box-shadow: 0 14px 28px rgba(0,0,0,.45); transform: translate(var(--x), var(--y)) rotate(var(--rot)); }
-.done-card canvas { width: 42px; height: 42px; image-rendering: pixelated; flex: none; }
-.done-card b { display: block; font-size: 13px; color: #fff; }
-.done-card span { display: block; margin-top: 2px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 @keyframes pop { from { transform: scale(.96); opacity: 0; } }
 
 /* ---------- landscape (and any wide stage) ---------- */
@@ -171,6 +176,7 @@ button, #alert, .done-card { cursor: pointer; }
   h2 { margin-bottom: 8px; }
   .tile { padding: 8px 6px 7px; gap: 3px; }
   .tile canvas { width: 46px; height: 46px; }
+  .sprite { width: 46px; height: 46px; }
   .clock { font-size: 48px; }
   .ctl button { width: 46px; height: 46px; }
   .ctl button.big { width: 58px; height: 58px; }
