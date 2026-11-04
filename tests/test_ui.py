@@ -176,7 +176,8 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "event": "UsageUpdate", "agent": "cursor", "context_pct": 85})
                     tile = page.locator('[data-id="ui-cursor"]')
                     tile.locator('.context-track[aria-valuenow="85"]').wait_for()
-                    assert "Before compact 85%" in tile.inner_text()
+                    assert "Before compact" in tile.inner_text()
+                    assert "85%" not in tile.inner_text()
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "event": "PostToolUse", "agent": "cursor", "context_pct": None})
                     page.wait_for_function('() => document.querySelector(\'[data-id="ui-cursor"] .context-label\')?.textContent === "Context unavailable"')
                     client.post("api/agents/event", json={"session_id": "cursor:aaa111", "state": "done", "name": "piDeck", "agent": "cursor"})
@@ -192,7 +193,7 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                         "usage": {"primary": {"used_pct": 40, "window_minutes": 43200, "label": "Included"},
                                   "secondary": {"used_pct": 5, "window_minutes": 43200, "label": "API"}},
                     })
-                    page.locator('.usage-meter[data-provider="cursor"]', has_text="Included").wait_for()
+                    page.locator('.usage-meter[data-provider="cursor"] [data-window="primary"][aria-valuenow="40"]').wait_for()
                     client.post("api/agents/event", json={
                         "session_id": "ui-done:explore", "state": "working", "name": "Explore",
                         "agent": "claude", "parent_id": "ui-done",
@@ -493,11 +494,11 @@ def test_usage_panel_touch_drag_and_keyboard_docking(
                 browser.close()
 
 
-def test_usage_donut_thresholds_and_unknown_values(
+def test_usage_bar_colors_and_unknown_values(
     tmp_path: Path,
     ) -> None:
     """
-    Color percentages at 70/90 boundaries and distinguish unavailable from zero.
+    Interpolate solid bar colors toward red and distinguish unavailable values from zero.
 
     Args:
         tmp_path (Path): Isolated server configuration directory.
@@ -513,26 +514,130 @@ def test_usage_donut_thresholds_and_unknown_values(
             page = browser.new_page()
             try:
                 page.goto(url)
-                donut = page.locator('.usage-meter[data-provider="codex"] .usage-donut').first
-                donut.wait_for()
+                bar = page.locator('.usage-meter[data-provider="codex"] .usage-bar[data-window="primary"]')
+                bar.wait_for()
+                colors = []
                 with httpx.Client(base_url=url, trust_env=False) as client:
-                    for pct, level in [(0, "green"), (69, "green"), (70, "yellow"), (90, "yellow"), (91, "red"), (100, "red")]:
+                    for pct in (0, 35, 70, 85, 100):
                         client.post("api/agents/event", json={
                             "session_id": "usage:codex", "event": "UsageUpdate", "agent": "codex",
                             "usage": {"primary": {"used_pct": pct, "window_minutes": 300}},
                         }).raise_for_status()
-                        expect(donut).to_have_attribute("aria-valuenow", str(pct))
-                        expect(donut).to_have_attribute("data-level", level)
-                        expect(donut).to_have_text(f"{pct}%")
-                        assert "conic-gradient" in donut.evaluate("el => getComputedStyle(el).backgroundImage")
+                        expect(bar).to_have_attribute("aria-valuenow", str(pct))
+                        expect(bar).to_have_attribute("data-available", "true")
+                        expect(bar).to_have_text("")
+                        fill = bar.locator("div")
+                        assert fill.evaluate("el => getComputedStyle(el).backgroundImage") == "none"
+                        colors.append(fill.evaluate("el => getComputedStyle(el).backgroundColor"))
+                        assert bar.evaluate("el => el.offsetWidth") == 24
+                    assert colors[0] == "rgb(95, 211, 176)"
+                    assert colors[2] == "rgb(255, 210, 103)"
+                    assert colors[4] == "rgb(255, 64, 64)"
+                    assert len(set(colors)) == 5
                     client.post("api/agents/event", json={
                         "session_id": "usage:codex", "event": "UsageUpdate", "agent": "codex",
                         "usage": {"primary": {"used_pct": 40, "window_minutes": 300, "resets_at": 1}},
                     }).raise_for_status()
-                    expect(donut).to_have_attribute("data-level", "unknown")
-                    expect(donut).to_have_text("—")
-                    assert donut.get_attribute("aria-valuenow") is None
+                    expect(bar).to_have_attribute("data-available", "false")
+                    expect(bar).to_have_text("")
+                    assert bar.get_attribute("aria-valuenow") is None
             finally:
+                browser.close()
+
+
+@pytest.mark.parametrize("width,height,rotate", [(800, 480, 0), (360, 400, 0), (800, 480, 90)])
+def test_compact_usage_focus_and_live_session_updates(
+    tmp_path: Path,
+    width: int,
+    height: int,
+    rotate: int,
+    ) -> None:
+    """
+    Toggle the heading, preserve live usage focus, and revisit sessions through collapsed sprites.
+
+    Args:
+        tmp_path (Path): Isolated directory for server configuration and saved settings.
+        width (int): Physical browser viewport width in pixels.
+        height (int): Physical browser viewport height in pixels.
+        rotate (int): Software display rotation used to exercise logical layout coordinates.
+
+    Returns:
+        None: Assertions complete when compact bars, counts, logos, and session navigation work.
+    """
+    from playwright.sync_api import expect, sync_playwright
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": width, "height": height})
+            errors, requests = [], []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("request", lambda request: requests.append(request.url))
+            try:
+                page.goto(url + f"?rotate={rotate}")
+                page.locator(".tile").first.wait_for()
+                section = page.locator("#v-agents")
+                expect(section).to_have_attribute("data-dock", "right")
+                count = page.locator(".tile").count()
+                expect(page.locator(".session-count")).to_have_text(f"{count} sessions")
+                assert page.locator(".usage-dock").inner_text().strip() == ""
+                assert page.locator(".usage-dock").evaluate("el => el.offsetWidth") == 44
+                assert page.locator(".usage-bar").first.evaluate("el => el.offsetWidth") == 24
+                assert page.locator(".usage-donut").count() == 0
+                assert page.locator("#settings-btn").get_attribute("aria-label") == "Settings"
+                assert page.locator("#settings-btn").evaluate("el => el.offsetLeft") <= 10
+                assert page.locator("#settings-btn").inner_text() == ""
+                assert page.locator("#pager-pages #settings-btn").count() == 0
+                page.wait_for_function("""() => [...document.querySelectorAll('.provider-logo')]
+                    .every(img => img.complete && img.naturalWidth > 0)""")
+                nav_font = page.locator('#pager [data-view="agents"]').evaluate("el => getComputedStyle(el).fontFamily")
+                assert page.locator(".tile .name").first.evaluate("el => getComputedStyle(el).fontFamily") == nav_font
+                toggle = page.locator("h2 [data-agent-view-toggle]")
+                expect(toggle).to_have_text("Agents")
+                toggle.press("Enter")
+                expect(section).to_have_attribute("data-mode", "usage")
+                expect(toggle).to_have_text("Usage")
+                assert page.locator(".mini-session").count() == count
+                assert page.locator(".tile").count() == 0
+                assert page.evaluate("currentView()") == "agents"
+                assert page.locator(".usage-provider").count() == 3
+                assert page.locator(".usage-window .usage-bar").first.evaluate("el => el.offsetWidth") <= 180
+                with httpx.Client(base_url=url, trust_env=False) as client:
+                    client.post("api/agents/event", json={
+                        "session_id": "focus-test", "state": "working", "agent": "codex", "name": "focus-test",
+                    }).raise_for_status()
+                    expect(page.locator(".session-count")).to_have_text(f"{count + 1} sessions")
+                    expect(section).to_have_attribute("data-mode", "usage")
+                    assert page.locator(".mini-session").count() == count + 1
+                    client.post("api/agents/event", json={
+                        "session_id": "usage:cursor", "event": "UsageUpdate", "agent": "cursor",
+                        "usage": {"primary": {"used_pct": 38, "window_minutes": 43200, "label": "Included"},
+                                  "secondary": {"used_pct": 94, "window_minutes": 43200, "label": "API"}},
+                    }).raise_for_status()
+                    cursor = page.locator('.usage-provider[data-provider="cursor"]')
+                    expect(cursor.locator('[data-window="primary"][role="progressbar"]')).to_have_attribute("aria-valuenow", "38")
+                    assert cursor.locator(".usage-window").evaluate_all("els => els.map(el => el.dataset.window)") == ["secondary", "primary"]
+                    expect(cursor.locator(".usage-window-heading").first).to_contain_text("API")
+                    expect(cursor.locator(".usage-window-heading").last).to_contain_text("Included")
+                    client.post("api/agents/event", json={"session_id": "focus-test", "state": "done"}).raise_for_status()
+                    page.locator("#alert.agent-done").wait_for()
+                    page.locator("#alert").click()
+                    mini = page.locator('.mini-session[data-id="focus-test"]')
+                    mini.locator(".mini-completion").wait_for()
+                    mini.scroll_into_view_if_needed()
+                    mini.click()
+                    expect(section).to_have_attribute("data-mode", "agents")
+                    expect(page.locator(".session-count")).to_have_text(f"{count + 1} sessions")
+                    assert page.locator('.tile[data-id="focus-test"] .completion-badge').count() == 0
+                    page.locator('.usage-meter[data-provider="cursor"]').click()
+                    expect(section).to_have_attribute("data-mode", "usage")
+                    expect(cursor).to_have_attribute("data-selected", "true")
+                assert not errors
+                assert all(request.startswith(url) or request.startswith("data:") for request in requests)
+            finally:
+                screenshots = Path("test-results/browser")
+                screenshots.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(screenshots / f"usage-focus-{width}x{height}-rot{rotate}.png"))
                 browser.close()
 
 
@@ -563,7 +668,8 @@ def test_settings_page_is_always_available(
                     page.locator(f'#v-settings [data-page="{name}"]').click()
                     expect(page.locator(f'#v-settings [data-page="{name}"]')).to_have_attribute("aria-pressed", "false")
                 assert page.locator("#pager button").count() == 1
-                assert page.locator("#pager button").text_content() == "Settings"
+                assert page.locator("#pager button").get_attribute("aria-label") == "Settings"
+                assert page.locator("#pager button svg").count() == 1
                 page.reload()
                 page.wait_for_selector("#v-settings")
                 assert page.locator("#pager button").count() == 1

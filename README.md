@@ -16,8 +16,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: customizable agent groups, usage donuts, an agent completing, Spotify, and Slack"><br>
-  <sub>Agents with compact usage donuts, an agent completing, then Spotify and Slack on an 800×480 display. All sessions, usage values, messages and album art are mock examples.</sub>
+  <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: agent groups, compact usage bars, a completion celebration, detailed usage, Spotify, and Slack"><br>
+  <sub>Agents with a thin usage column, a completion celebration, detailed usage, then Spotify and Slack on an 800×480 display. All sessions, usage values, messages and album art are mock examples.</sub>
 </p>
 
 ## How it works
@@ -50,9 +50,9 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 ## Integrations
 
-- **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Compact account donuts show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
-- **Codex CLI** — the same tiles, context bars, and account usage donuts. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
-- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. Included and API allowance donuts use the sign-in already on this computer. [Setup](#cursor)
+- **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Tiny account bars show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
+- **Codex CLI** — the same tiles, context bars, and account usage bars. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
+- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. API and Included allowance bars use the sign-in already on this computer. [Setup](#cursor)
 - **Spotify** — now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
 - **Slack** — DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
 
@@ -130,13 +130,15 @@ Merge `hooks/settings.example.json` into `~/.claude/settings.json` (and `hooks/c
 
 Notes: the tile name is the project folder (override with `PIDECK_NAME`). Context % is estimated from the session transcript's latest token usage against `PIDECK_CONTEXT_WINDOW` (default 200000; set 1000000 for 1M-context models). It's an estimate, not an official number. Drop `PostToolUse` from the hooks if you don't want a process spawned per tool call; the only downside is a tile staying "needs you" until the next prompt or stop.
 
-**Arrange your display.** Drag a provider heading to move its entire group up or down. The headings also support the up/down arrow keys. Drag the grip on the account-usage panel to dock it at the top, bottom, left, or right; drop targets show the selected edge. The grip also accepts arrow keys, and Settings provides position buttons and a layout reset. Group order and docking are remembered on this display across reloads, and live updates preserve them.
+**Arrange your display.** Drag a provider heading to move its entire group up or down. The headings also support the up/down arrow keys. Account usage defaults to a thin column on the right. Drag its small grip to dock it at another edge; drop targets show the selected position. The grip also accepts arrow keys, and Settings provides position buttons and a layout reset. Group order and docking are remembered on this display across reloads, and live updates preserve them.
 
-**Account usage.** Small donut charts show each connected provider's reported allowance usage and percentage, with separate short-window and weekly values (Included/API for Cursor). The displayed percentage is **green below 70%**, **yellow from 70% through 90%**, and **red above 90%**. These are account totals shared across sessions. Zero usage is shown as 0%; missing or expired data shows a dash instead of a percentage. Updates arrive with agent activity. Opening the display also refreshes the Claude and Cursor totals from the sign-in already on this computer and posts only the percentages. Old metrics become unavailable after `stale_hours`. If several computers report the same provider, the most recently received report is shown; use the same account on those computers for consistent totals.
+**Account usage.** Two tiny bars sit beneath each provider logo, with no numerical labels in the compact column. The first bar is the short window and the second is weekly; Cursor shows API first and Included second. Each bar has one solid color that changes smoothly from green through yellow toward red as usage fills up, reaching red at 100%. These are account totals shared across sessions. Click the **AGENTS** heading or a provider logo to open detailed usage with percentages and reset times. Sessions collapse into a sprite column on the left; click a sprite to return to that session card, or click **USAGE** to return to the full agents view. The session count stays visible in both views. Zero is distinct from unavailable data in the detailed view; missing, expired, or stale values stay unavailable instead of implying zero usage.
 
-**Settings.** Settings is a full page in the bottom navigation and always stays accessible, even when you turn off Agents, Playing, and Slack.
+Updates arrive with agent activity. Opening the display also refreshes the Claude and Cursor totals from the sign-in already on this computer and posts only the percentages. Old metrics become unavailable after `stale_hours`. If several computers report the same provider, the most recently received report is shown; use the same account on those computers for consistent totals. Provider logos are bundled locally, with attribution in [the logo notice](pideck/ui/logos/NOTICE.md).
 
-Claude's 5-hour and weekly values come from the sign-in already on this computer when that sign-in includes an access token, and from the documented [status-line payload](https://code.claude.com/docs/en/statusline) after Claude reports them. The status line also supplies the model's context percentage. The access token is not sent to the display. A fresh sample is kept so the next launch can show the donuts before Claude sends another status line. An empty saved sign-in leaves the allowance values to the status line.
+**Settings.** The gear stays in the bottom-left and opens its own Settings page. It always stays accessible, even when you turn off Agents, Playing, and Slack. Page navigation stays along the bottom in portrait and landscape.
+
+Claude's 5-hour and weekly values come from the sign-in already on this computer when that sign-in includes an access token, and from the documented [status-line payload](https://code.claude.com/docs/en/statusline) after Claude reports them. The status line also supplies the model's context percentage. The access token is not sent to the display. A fresh sample is kept so the next launch can show the bars before Claude sends another status line. An empty saved sign-in leaves the allowance values to the status line.
 
 **Codex specifics.** Codex has lifecycle hooks with the same shape as Claude Code's, so the same script works (the installer passes `--source codex`).
 
@@ -163,7 +165,7 @@ It merges piDeck's flat hook entries into `~/.cursor/hooks.json`, preserves othe
 
 Conversation IDs produce one tile across turns. Prompt submission and tool completion report working; `stop` reports done, cancelled, or error; session end removes the tile. A denied tool reports needs-you, although hooks do not provide a general signal for every approval prompt. piDeck does not block actions or send follow-up prompts, and it does not forward your prompts, email address, or tool inputs.
 
-Cursor exposes `context_usage_percent` on `preCompact`, rather than a continuous context feed. piDeck labels that bar **Before compact** and clears it on the next lifecycle update so the pre-compaction snapshot is not mistaken for current usage. Account donuts use Cursor's own usage service: piDeck reads the sign-in already stored in Cursor's local database, refreshes it when it has expired, and posts only the Included and API percents. The access token is not sent to the display. If that sign-in cannot be read or Cursor requires a new sign-in, the values stay unavailable.
+Cursor exposes `context_usage_percent` on `preCompact`, rather than a continuous context feed. piDeck labels that bar **Before compact** and clears it on the next lifecycle update so the pre-compaction snapshot is not mistaken for current usage. Account bars use Cursor's own usage service: piDeck reads the sign-in already stored in Cursor's local database, refreshes it when it has expired, and posts only the Included and API percents. The access token is not sent to the display. If that sign-in cannot be read or Cursor requires a new sign-in, the values stay unavailable.
 
 When the display starts, and again every 15 minutes, it reads Claude, Codex, and Cursor session files touched in the last six hours and shows those chats even if they began before piDeck was open. A file touched in the last two minutes is shown as working; an older one is idle. Claude's account values are remembered from the last status-line report, because Claude does not write those percents into the session file. Codex's account values are read from the newest local session log. Re-run the hook installer so subagent events are registered.
 

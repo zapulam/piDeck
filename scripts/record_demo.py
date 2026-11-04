@@ -130,7 +130,7 @@ def record(
     destination: Path,
     ) -> None:
     """
-    Record agents, a completed turn, Spotify, and Slack without opening Settings.
+    Record agents, a completed turn, detailed usage, Spotify, and Slack without opening Settings.
 
     Args:
         destination (Path): GIF output path.
@@ -165,7 +165,7 @@ def record(
                             "secondary": {"used_pct": 84, "window_minutes": 10080}}},
                     ]:
                         client.post("api/agents/event", json=event).raise_for_status()
-                    page.locator('.usage-meter[data-provider="cursor"]', has_text="Included").wait_for()
+                    page.locator('.usage-meter[data-provider="cursor"] [data-window="primary"][aria-valuenow="34"]').wait_for()
                     page.evaluate("""() => {
                         layout.groups = ['codex', 'claude', 'cursor']; saveLayout(); renderAll();
                     }""")
@@ -187,6 +187,10 @@ def record(
                     tile = page.locator('.tile[data-id="mock-0"]')
                     tile.locator(".completion-badge").wait_for()
                     capture(page, frames, 1.5)
+                    page.locator("[data-agent-view-toggle]").click()
+                    page.locator(".usage-details .usage-bar").first.wait_for()
+                    capture(page, frames, 3)
+                    page.locator("[data-agent-view-toggle]").click()
                     page.locator('#pager button[data-view="now_playing"]').click()
                     capture(page, frames, 4)
                     assert page.evaluate("currentView()") == "now_playing"

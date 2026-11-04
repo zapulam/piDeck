@@ -39,6 +39,7 @@ function ago(ts) {
 const mmss = (ms) => { const t = Math.floor(ms / 1000); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
 
 // ---------- shell ----------
+const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.1 7.1 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.22-1.12.53-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.51.41 1.05.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.58-.22 1.12-.53 1.63-.94l2.39.96c.22.1.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`;
 function navViews() {
   const chosen = new Set(S.cfg.views || PAGES);
   return [...PAGES.filter((id) => chosen.has(id)), "settings"];
@@ -55,10 +56,15 @@ function buildShell() {
     track.appendChild(sec);
     const b = document.createElement("button");
     b.type = "button";
-    if (v === "settings") b.id = "settings-btn";
-    b.dataset.view = v; b.textContent = VIEWS[v].label;
+    if (v === "settings") {
+      b.id = "settings-btn";
+      b.setAttribute("aria-label", "Settings");
+      b.title = "Settings";
+      b.innerHTML = GEAR;
+    } else b.textContent = VIEWS[v].label;
+    b.dataset.view = v;
     b.onclick = () => sec.scrollIntoView({ behavior: "smooth", inline: "start" });
-    pages.appendChild(b);
+    if (v === "settings") pager.appendChild(b); else pages.appendChild(b);
   });
   pager.appendChild(pages);
   if (!track.dataset.bound) {
@@ -88,8 +94,8 @@ function settleSoon() {
 function markPager() {
   const track = $("#track");
   const i = Math.round(track.scrollLeft / track.clientWidth);
-  [...$("#pager-pages").children].forEach((b, j) => b.classList.toggle("on", i === j));
   const cur = track.children[i]?.dataset.view;
+  $("#pager").querySelectorAll("[data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === cur));
   setBg();
   if (cur === "slack" && S.unread.size) { S.unread.clear(); renderAll(); }
 }
@@ -108,14 +114,23 @@ const ORDER = { waiting: 0, error: 1, working: 2, done: 3, idle: 4 };
 const PROVIDERS = { claude: "Claude", codex: "Codex", cursor: "Cursor" };
 const GROUPS = ["cursor", "claude", "codex"];
 const DOCKS = ["top", "bottom", "left", "right"];
+let agentView = "agents";
+let selectedUsage = null;
+const agentScroll = { agents: 0, usage: 0, mini: 0 };
 const layout = (() => {
   let saved;
   try { saved = JSON.parse(localStorage.getItem("pideck_agent_layout") || "{}"); } catch {}
   return {
     groups: [...new Set([...(Array.isArray(saved?.groups) ? saved.groups.filter((v) => GROUPS.includes(v)) : []), ...GROUPS])],
-    dock: DOCKS.includes(saved?.dock) ? saved.dock : "bottom",
+    version: 2,
+    dock: saved?.version === 2 && DOCKS.includes(saved.dock) ? saved.dock : "right",
   };
 })();
+function providerLogo(kind) {
+  return Object.hasOwn(PROVIDERS, kind) ?
+    `<img class="provider-logo${kind === "claude" ? "" : " monochrome"}" src="logos/${kind}.svg" alt="" aria-hidden="true" draggable="false" width="18" height="18">` :
+    `<span class="provider-fallback" aria-hidden="true">${esc(kind.slice(0, 1).toUpperCase())}</span>`;
+}
 function saveLayout() {
   try { localStorage.setItem("pideck_agent_layout", JSON.stringify(layout)); } catch {}
 }
@@ -142,48 +157,96 @@ function tileHtml(a, peers) {
     <div class="name">${esc(a.name)}</div>
     ${mark ? `<div class="tag">${esc(mark)}</div>` : ""}
     <div class="meta"><b>${status}</b></div>
-    <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"} ${ctx != null ? ctx + "%" : "unavailable"}</div>
+    <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"}${ctx == null ? " unavailable" : ""}</div>
     ${ctx == null ? "" : `<div class="context-track" role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"><div></div></div>`}
-    <div class="meta" data-ago="${a.state_since}">${ago(a.state_since)}</div>
   </div>`;
 }
 function usageDuration(minutes) {
   return minutes === 10080 ? "Weekly" : minutes % 1440 === 0 ? `${minutes / 1440}d` :
     minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
 }
-function renderUsage(list) {
+function usageColor(pct) {
+  const stops = [[95, 211, 176], [255, 210, 103], [255, 64, 64]];
+  const low = pct <= 70 ? 0 : 1, fraction = pct <= 70 ? pct / 70 : (pct - 70) / 30;
+  return `rgb(${stops[low].map((value, i) => Math.round(value + (stops[low + 1][i] - value) * fraction)).join(", ")})`;
+}
+function usageProviders(list) {
   const now = Date.now() / 1000;
-  const meters = layout.groups.map((kind) => [kind, PROVIDERS[kind]]).filter(([kind]) =>
+  return layout.groups.filter((kind) =>
     list.some((a) => (a.agent || "claude") === kind) ||
     now - (S.agent_usage[kind]?.updated_at || 0) < S.cfg.agents_stale_hours * 3600
-  ).map(([kind, name]) => {
+  ).map((kind) => {
     const usage = S.agent_usage[kind];
     const stale = !usage || now - usage.updated_at >= S.cfg.agents_stale_hours * 3600;
-    const rings = ["primary", "secondary"].map((key, i) => {
+    const keys = kind === "cursor" ? ["secondary", "primary"] : ["primary", "secondary"];
+    const windows = keys.map((key) => {
       const win = usage?.[key];
       const expired = win?.resets_at != null && win.resets_at <= now;
-      const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.round(win.used_pct) : null;
-      const label = win?.label || (kind === "cursor" ? (i ? "API" : "Included") : win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h");
-      const detail = pct == null ? "—" : pct + "%";
-      const level = pct == null ? "unknown" : pct < 70 ? "green" : pct <= 90 ? "yellow" : "red";
-      return `<div class="usage-metric" title="${esc(name + " " + label + ": " + (pct == null ? "unavailable" : detail + " used"))}">
-        <div class="usage-donut" data-level="${level}" style="--used:${pct ?? 0}%" ${pct == null ?
-          `role="img" aria-label="${esc(name + " " + label)} usage unavailable"` :
-          `role="progressbar" aria-label="${esc(name + " " + label)} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"`}>
-          <b>${detail}</b></div><span>${esc(label)}</span></div>`;
-    }).join("");
-    return `<div class="usage-meter" data-provider="${kind}"><b>${name}</b><div class="usage-pair">${rings}</div></div>`;
+      const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.max(0, Math.min(100, win.used_pct)) : null;
+      const label = win?.label || (kind === "cursor" ? (key === "primary" ? "Included" : "API") :
+        win ? usageDuration(win.window_minutes) : key === "secondary" ? "Weekly" : "5h");
+      return { key, label, pct, resets: win?.resets_at, stale, expired };
+    });
+    return { kind, name: PROVIDERS[kind], windows };
   });
-  return meters.length ? `<aside class="usage-dock" data-drag-usage aria-label="Account usage">
+}
+function usageBar(window, name) {
+  return `<div class="usage-bar" data-window="${window.key}" data-available="${window.pct != null}"
+    style="--used:${window.pct ?? 0}%;--usage-color:${window.pct == null ? "var(--dim)" : usageColor(window.pct)}" ${window.pct == null ?
+      `role="img" aria-label="${esc(name + " " + window.label)} usage unavailable"` :
+      `role="progressbar" aria-label="${esc(name + " " + window.label)} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${window.pct}"`}><div></div></div>`;
+}
+function usageReset(window) {
+  if (window.pct == null) return window.expired ? "Awaiting a new usage sample" : "Usage unavailable";
+  const seconds = window.resets - Date.now() / 1000;
+  let reset = "Reset time unavailable";
+  if (Number.isFinite(seconds) && seconds > 0) {
+    const minutes = Math.ceil(seconds / 60), hours = Math.floor(minutes / 60), days = Math.floor(hours / 24);
+    reset = "Resets in " + (days ? `${days}d ${hours % 24}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`);
+  }
+  return (window.pct >= 100 ? "Limit reached · " : "") + reset;
+}
+function renderUsage(list, detailed = false) {
+  const providers = usageProviders(list);
+  if (detailed) return providers.length ? providers.map(({ kind, name, windows }) =>
+    `<div class="usage-provider" data-provider="${kind}" data-selected="${selectedUsage === kind}" role="group" aria-label="${name} usage">
+      <div class="usage-provider-logo" title="${name}">${providerLogo(kind)}</div><div class="usage-windows">${windows.map((window) =>
+        `<div class="usage-window" data-window="${window.key}"><div class="usage-window-heading"><span>${esc(window.label === "5h" ? "5-hour session" : window.label)}</span>
+          <b>${window.pct == null ? "—" : Math.round(window.pct) + "%"}</b></div>${usageBar(window, name)}
+          <small>${esc(usageReset(window))}</small></div>`).join("")}</div></div>`).join("") :
+    `<div class="empty">No account usage yet.<br>Usage appears when a provider reports its allowance.</div>`;
+  return providers.length ? `<aside class="usage-dock" data-drag-usage aria-label="Account usage">
     <button type="button" class="usage-grab" data-drag-usage aria-label="Move usage panel" title="Drag to an edge, or use the arrow keys"><span class="drag-grip" aria-hidden="true"></span></button>
-    ${meters.join("")}</aside>` : "";
+    ${providers.map(({ kind, name, windows }) => `<button type="button" class="usage-meter" data-provider="${kind}" data-show-usage="${kind}"
+      aria-label="Show ${name} usage details" title="${name} usage">${providerLogo(kind)}<span class="usage-pair">${windows.map((window) => usageBar(window, name)).join("")}</span></button>`).join("")}</aside>` : "";
+}
+function miniAgents(list) {
+  return layout.groups.map((kind) => {
+    const items = list.filter((a) => (a.agent || "claude") === kind);
+    if (!items.length) return "";
+    return `<div class="mini-group">${providerLogo(kind)}${items.map((a) => {
+      const same = items.filter((other) => other.name === a.name);
+      const unseen = a.state === "done" && completionSeen.get(a.id) !== a.state_since;
+      return `<button type="button" class="mini-session" data-open-agent="${esc(a.id)}" data-id="${esc(a.id)}" data-state="${a.state}"
+        data-name="${esc(a.name)}" data-seed="${esc(same.length > 1 ? a.id : a.name)}" data-unseen="${unseen}"
+        aria-label="Show ${esc(a.name)}, ${PROVIDERS[kind]}, ${esc(a.state)}" title="${esc(a.name)} · ${esc(a.state)}">
+        <canvas width="12" height="12" aria-hidden="true"></canvas>${unseen ? `<span class="mini-completion" aria-label="Unseen completion">✓</span>` : ""}</button>`;
+    }).join("")}</div>`;
+  }).join("");
 }
 function renderAgents(sec) {
   if (drag) { pendingRender = true; return; }
-  const scroll = $(".agents-main", sec)?.scrollTop || 0;
+  if ($(".agents-main", sec)) agentScroll.agents = $(".agents-main", sec).scrollTop;
+  if ($(".usage-details", sec)) agentScroll.usage = $(".usage-details", sec).scrollTop;
+  if ($(".agents-mini", sec)) agentScroll.mini = $(".agents-mini", sec).scrollTop;
+  const focused = sec.contains(document.activeElement) ? document.activeElement : null;
+  const focusToggle = focused?.matches("[data-agent-view-toggle]");
+  const focusMini = focused?.dataset.openAgent;
   const list = [...S.agents];
   const w = list.filter((a) => a.state === "working").length, n = list.filter((a) => a.state === "waiting").length;
-  let html = `<h2>Agents <small>${w} working${n ? ` · <span style="color:var(--waiting)">${n} waiting</span>` : ""}</small></h2>`;
+  const header = `<h2 class="agents-header"><button type="button" data-agent-view-toggle aria-label="${agentView === "agents" ? "Show detailed usage" : "Show agents"}">${agentView === "agents" ? "Agents" : "Usage"}</button>
+    <small class="session-count" title="${w} working · ${n} waiting">${list.length} ${list.length === 1 ? "session" : "sessions"}</small></h2>`;
+  let html = "";
   if (!list.length) {
     html += `<div class="empty">No agents yet.<br>Start a Claude Code, Codex, or Cursor session with the piDeck hook installed<br>(see <code>hooks/</code>) and it will show up here.</div>`;
   } else {
@@ -200,26 +263,33 @@ function renderAgents(sec) {
       if (!items.length) return "";
       const label = PROVIDERS[kind] || kind;
       return `<div class="agent-group" data-provider="${esc(kind)}"><h3><button type="button" class="group-handle" data-drag-group="${esc(kind)}"
-        aria-label="Move ${esc(label)} group" title="Drag to reorder, or use the up and down arrow keys"><span class="drag-grip" aria-hidden="true"></span>${esc(label)}</button></h3>
+        aria-label="Move ${esc(label)} group" title="Drag to reorder, or use the up and down arrow keys"><span class="drag-grip" aria-hidden="true"></span>${providerLogo(kind)}${esc(label)}</button></h3>
         <div class="grid">${items.map((a) => tileHtml(a, items)).join("")}</div></div>`;
     }).join("");
   }
   sec.classList.add("agents-page");
   sec.dataset.dock = layout.dock;
-  sec.innerHTML = `<div class="agents-main">${html}</div>${renderUsage(list)}`;
-  $(".agents-main", sec).scrollTop = scroll;
+  sec.dataset.mode = agentView;
+  sec.innerHTML = header + (agentView === "usage" ?
+    `<aside class="agents-mini" aria-label="Agent sessions">${miniAgents(list)}</aside><div class="usage-details">${renderUsage(list, true)}</div>` :
+    `<div class="agents-main">${html}</div>${renderUsage(list)}`);
+  for (const [selector, key] of [[".agents-main", "agents"], [".usage-details", "usage"], [".agents-mini", "mini"]]) {
+    const pane = $(selector, sec); if (pane) pane.scrollTop = agentScroll[key];
+  }
+  if (focusToggle) $("[data-agent-view-toggle]", sec)?.focus({ preventScroll: true });
+  if (focusMini) [...sec.querySelectorAll("[data-open-agent]")].find((el) => el.dataset.openAgent === focusMini)?.focus({ preventScroll: true });
   animateTiles();
 }
 function animateTiles() {
   const now = performance.now();
-  document.querySelectorAll(".tile").forEach((t) => {
+  document.querySelectorAll(".tile, .mini-session").forEach((t) => {
     let motion = motions.get(t.dataset.id);
     if (!motion || motion.state !== t.dataset.state) {
       motion = creatureMotion(t.dataset.state, now);
       motions.set(t.dataset.id, motion);
     }
     const pose = stepCreatureMotion(motion, now);
-    $(".thinking", t).hidden = !pose.thinking;
+    const thinking = $(".thinking", t); if (thinking) thinking.hidden = !pose.thinking;
     drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, seed: t.dataset.seed, frame, ...pose });
   });
 }
@@ -307,7 +377,7 @@ function finishDrag(cancel = false) {
 }
 document.addEventListener("pointerdown", (e) => {
   const handle = e.target.closest("[data-drag-group], [data-drag-usage]");
-  if (!handle || e.button !== 0 || drag) return;
+  if (!handle || e.button !== 0 || drag || e.target.closest("[data-show-usage]")) return;
   drag = { handle, kind: handle.dataset.dragGroup || "usage", pointerId: e.pointerId,
     startX: e.clientX, startY: e.clientY, clientX: e.clientX, clientY: e.clientY, active: false };
   handle.setPointerCapture(e.pointerId);
@@ -504,10 +574,34 @@ function connect() {
 // ---------- boot ----------
 document.addEventListener("click", async (e) => {
   if (performance.now() < suppressClickUntil) { e.preventDefault(); return; }
+  if (e.target.closest("[data-agent-view-toggle]")) {
+    agentView = agentView === "agents" ? "usage" : "agents";
+    selectedUsage = null;
+    renderAgents($("#v-agents"));
+    $("[data-agent-view-toggle]")?.focus({ preventScroll: true });
+    return;
+  }
+  const usage = e.target.closest("[data-show-usage]");
+  if (usage) {
+    agentView = "usage"; selectedUsage = usage.dataset.showUsage;
+    renderAgents($("#v-agents"));
+    $("[data-agent-view-toggle]")?.focus({ preventScroll: true });
+    return;
+  }
+  const mini = e.target.closest("[data-open-agent]");
+  if (mini) {
+    const id = mini.dataset.openAgent, agent = S.agents.find((a) => a.id === id);
+    if (agent?.state === "done") { completionSeen.set(id, agent.state_since); saveCompletionSeen(); }
+    agentView = "agents";
+    renderAgents($("#v-agents"));
+    [...document.querySelectorAll(".tile")].find((el) => el.dataset.id === id)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    $("[data-agent-view-toggle]")?.focus({ preventScroll: true });
+    return;
+  }
   const dock = e.target.closest("button[data-dock]")?.dataset.dock;
   if (dock) { layout.dock = dock; saveLayout(); renderAll(); return; }
   if (e.target.closest("[data-reset-layout]")) {
-    layout.groups = [...GROUPS]; layout.dock = "bottom"; saveLayout(); renderAll(); return;
+    layout.groups = [...GROUPS]; layout.dock = "right"; saveLayout(); renderAll(); return;
   }
   const tile = e.target.closest('.tile[data-unseen="true"]');
   if (tile) return acknowledgeSession(tile.dataset.id);
@@ -546,7 +640,7 @@ document.addEventListener("keydown", (e) => {
     [...document.querySelectorAll("[data-drag-group]")].find((el) => el.dataset.dragGroup === group.dataset.dragGroup)?.focus();
     return;
   }
-  if (e.target.closest("[data-drag-usage]") && e.key.startsWith("Arrow")) {
+  if (e.target.closest(".usage-grab") && e.key.startsWith("Arrow")) {
     e.preventDefault();
     const edge = { ArrowUp: "top", ArrowDown: "bottom", ArrowLeft: "left", ArrowRight: "right" }[e.key];
     if (edge) { layout.dock = edge; saveLayout(); renderAll(); $(".usage-grab")?.focus(); }
