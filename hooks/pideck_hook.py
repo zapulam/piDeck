@@ -35,6 +35,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -619,7 +620,15 @@ def remember_usage(
             current = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(current, dict):
             current = {}
-        current[agent] = {"usage": usage, "updated_at": time.time()}
+        previous = current.get(agent) if isinstance(current.get(agent), dict) else {}
+        entry = {"usage": usage, "updated_at": time.time()}
+        # Replaying a cached sample must not look like a fresh provider fetch.
+        if str(ev.get("session_id") or "").startswith("usage:"):
+            if previous.get("fetched_at"):
+                entry["fetched_at"] = previous["fetched_at"]
+        else:
+            entry["fetched_at"] = entry["updated_at"]
+        current[agent] = entry
         path.write_text(json.dumps(current), encoding="utf-8")
         try:
             os.chmod(path, 0o600)
@@ -659,6 +668,102 @@ def cached_usage_events(
     return events
 
 
+def _load_cache(
+        env,
+):
+    """Read the percentage cache, or an empty object when it is missing.
+
+    Args:
+        env: Environment mapping used to locate the cache.
+
+    Returns:
+        The cache object. A missing or unreadable file yields an empty dict.
+    """
+    try:
+        data = json.loads(usage_cache_path(env).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def stamp_fetch(
+        env,
+        agent,
+        when,
+):
+    """Remember when a provider was last asked, even if the answer was unusable.
+
+    Args:
+        env: Environment mapping used to locate the cache.
+        agent: Provider name, one of claude, codex, or cursor.
+        when: Unix time of the attempt.
+    """
+    path = usage_cache_path(env)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        current = _load_cache(env)
+        entry = dict(current.get(agent) if isinstance(current.get(agent), dict) else {})
+        entry["fetched_at"] = when
+        current[agent] = entry
+        path.write_text(json.dumps(current), encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        return
+
+
+def note_fetch(
+        env,
+        agent,
+        note,
+):
+    """Record why an account-usage request produced no bars. Never store a token or body.
+
+    Args:
+        env: Environment mapping used to locate the cache.
+        agent: Provider name.
+        note: Short status such as http_401 or no_sign_in.
+    """
+    path = usage_cache_path(env)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        current = _load_cache(env)
+        entry = dict(current.get(agent) if isinstance(current.get(agent), dict) else {})
+        entry["note"] = str(note)[:40]
+        current[agent] = entry
+        path.write_text(json.dumps(current), encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        return
+
+
+def fetched_at(
+        env,
+        agent,
+):
+    """When this provider was last asked for account usage.
+
+    Args:
+        env: Environment mapping used to locate the cache.
+        agent: Provider name.
+
+    Returns:
+        A Unix time, or 0 when this provider has not been asked.
+    """
+    entry = _load_cache(env).get(agent)
+    if not isinstance(entry, dict):
+        return 0
+    try:
+        return float(entry.get("fetched_at") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _window(
         percent,
         minutes,
@@ -682,6 +787,27 @@ def _window(
     return window
 
 
+def _field(
+        source,
+        *names,
+):
+    """Return the first present value among several spellings of one field.
+
+    Args:
+        source: Object that may hold the field.
+        names: Candidate keys, preferred name first.
+
+    Returns:
+        The first value that is not None, or None when none of the keys exist.
+    """
+    if not isinstance(source, dict):
+        return None
+    for name in names:
+        if name in source and source[name] is not None:
+            return source[name]
+    return None
+
+
 def cursor_usage_from_body(
         payload,
 ):
@@ -695,18 +821,23 @@ def cursor_usage_from_body(
     """
     if not isinstance(payload, dict):
         return None
-    plan = payload.get("planUsage") if isinstance(payload.get("planUsage"), dict) else {}
-    reset = payload.get("billingCycleEnd")
+    plan = _field(payload, "planUsage", "plan_usage")
+    if not isinstance(plan, dict):
+        individual = _field(payload, "individualUsage", "individual_usage")
+        plan = _field(individual, "plan") if isinstance(individual, dict) else None
+    if not isinstance(plan, dict):
+        plan = {}
+    reset = _field(payload, "billingCycleEnd", "billing_cycle_end")
     # The dashboard sentence "N% of your included usage" is included spend over the plan limit.
     # totalPercentUsed is a different internal mix and is only a fallback.
-    limit = plan.get("limit")
-    spent = plan.get("includedSpend")
+    limit = _field(plan, "limit")
+    spent = _field(plan, "includedSpend", "included_spend")
     if isinstance(limit, (int, float)) and isinstance(spent, (int, float)) and limit > 0 and spent >= 0:
         included = min(100.0, spent * 100.0 / limit)
     else:
-        included = plan.get("totalPercentUsed")
-    api = plan.get("apiPercentUsed")
-    auto = plan.get("autoPercentUsed")
+        included = _field(plan, "totalPercentUsed", "total_percent_used")
+    api = _field(plan, "apiPercentUsed", "api_percent_used")
+    auto = _field(plan, "autoPercentUsed", "auto_percent_used")
     primary = _window(included if included is not None else auto, 43200, reset, "Included")
     secondary_pct = api if api is not None else (auto if included is not None else None)
     secondary = _window(secondary_pct, 43200, reset, "API" if api is not None else "Auto")
@@ -738,26 +869,28 @@ def cursor_state_db(
     return base / "Cursor" / "User" / "globalStorage" / "state.vscdb"
 
 
-def read_cursor_token(
+def read_cursor_value(
         env,
+        key,
 ):
-    """Read the local Cursor access token. Callers must not log or forward it.
+    """Read one Cursor sign-in value. Callers must not log or forward it.
 
     Args:
         env: Environment mapping used to find state.vscdb.
+        key: ItemTable key, such as cursorAuth/accessToken.
 
     Returns:
-        The access token, or None when the database or the key is unavailable.
+        The stored string, or None when the database or the key is unavailable.
     """
     path = cursor_state_db(env)
     if not path.is_file():
         return None
     try:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
             row = conn.execute(
                 "select value from ItemTable where key = ? limit 1",
-                ("cursorAuth/accessToken",),
+                (key,),
             ).fetchone()
         finally:
             conn.close()
@@ -774,6 +907,88 @@ def read_cursor_token(
     return value if isinstance(value, str) and value else None
 
 
+def read_cursor_token(
+        env,
+):
+    """Read the local Cursor access token. Callers must not log or forward it.
+
+    Args:
+        env: Environment mapping used to find state.vscdb.
+
+    Returns:
+        The access token, or None when the database or the key is unavailable.
+    """
+    return read_cursor_value(env, "cursorAuth/accessToken")
+
+
+# Cursor's desktop access token expires after about an hour. This is the public client id it refreshes with.
+CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
+
+
+def refresh_cursor_token(
+        env,
+        opener,
+):
+    """Exchange Cursor's refresh token for a new access token. Nothing is written back.
+
+    Args:
+        env: Environment mapping used to find state.vscdb.
+        opener: Callable matching urllib.request.urlopen.
+
+    Returns:
+        The new access token and an empty note, or None and a short reason.
+    """
+    refresh = read_cursor_value(env, "cursorAuth/refreshToken")
+    if not refresh:
+        return None, "no_refresh"
+    request = urllib.request.Request(
+        "https://api2.cursor.sh/oauth/token",
+        data=json.dumps({
+            "grant_type": "refresh_token",
+            "client_id": CURSOR_CLIENT_ID,
+            "refresh_token": refresh,
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with opener(request, timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8", "ignore"))
+    except urllib.error.HTTPError as exc:
+        return None, "refresh_http_" + str(exc.code)
+    except (OSError, ValueError) as exc:
+        return None, "refresh_bad_json" if isinstance(exc, ValueError) else "refresh_unreachable"
+    if not isinstance(body, dict) or body.get("shouldLogout") is True:
+        return None, "refresh_logout"
+    token = body.get("access_token") or body.get("accessToken")
+    if not isinstance(token, str) or not token:
+        return None, "refresh_empty"
+    return token, ""
+
+
+def _cursor_usage_request(
+        token,
+):
+    """Build the current-period usage request. The token stays in the header only.
+
+    Args:
+        token: Cursor access token.
+
+    Returns:
+        The POST request.
+    """
+    return urllib.request.Request(
+        "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+        data=b"{}",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "Connect-Protocol-Version": "1",
+        },
+        method="POST",
+    )
+
+
 def fetch_cursor_usage(
         env,
         opener=None,
@@ -787,28 +1002,199 @@ def fetch_cursor_usage(
     Returns:
         A usage-only Cursor event, or None when the sign-in or the service is unavailable.
     """
+    open_url = opener or urllib.request.urlopen
     token = read_cursor_token(env)
     if not token:
+        note_fetch(env, "cursor", "no_sign_in")
+        return None
+    request = _cursor_usage_request(token)
+    try:
+        with open_url(request, timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8", "ignore"))
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401:
+            note_fetch(env, "cursor", "http_" + str(exc.code))
+            return None
+        token, reason = refresh_cursor_token(env, open_url)
+        if not token:
+            note_fetch(env, "cursor", reason)
+            return None
+        request = _cursor_usage_request(token)
+        try:
+            with open_url(request, timeout=5) as response:
+                body = json.loads(response.read().decode("utf-8", "ignore"))
+        except urllib.error.HTTPError as retry:
+            note_fetch(env, "cursor", "http_" + str(retry.code))
+            return None
+        except (OSError, ValueError) as retry:
+            note_fetch(env, "cursor", "bad_json" if isinstance(retry, ValueError) else type(retry).__name__)
+            return None
+    except (OSError, ValueError) as exc:
+        note_fetch(env, "cursor", "bad_json" if isinstance(exc, ValueError) else type(exc).__name__)
+        return None
+    usage = cursor_usage_from_body(body)
+    if not usage:
+        note_fetch(env, "cursor", "unrecognized")
+        return None
+    event = {"session_id": "usage:cursor", "event": "UsageUpdate", "agent": "cursor", "usage": usage}
+    remember_usage(event, env)
+    return event
+
+
+# Claude's usage endpoint rate-limits a token after a short burst, so a launch asks at most twice an hour.
+CLAUDE_USAGE_INTERVAL = 1800
+
+
+def claude_credentials_path(
+        env,
+):
+    """Locate the Claude sign-in file without opening it.
+
+    Args:
+        env: Environment mapping. CLAUDE_CREDENTIALS overrides the home path.
+
+    Returns:
+        Path to the credentials file.
+    """
+    override = env.get("CLAUDE_CREDENTIALS")
+    if override:
+        return Path(override)
+    home = Path(env.get("PIDECK_HOME") or Path.home())
+    return home / ".claude" / ".credentials.json"
+
+
+def read_claude_token(
+        env,
+):
+    """Read the local Claude access token. Callers must not log or forward it.
+
+    Args:
+        env: Environment mapping used to find the credentials file.
+
+    Returns:
+        The access token, or None when the file or the sign-in is unavailable.
+    """
+    path = claude_credentials_path(env)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    oauth = data.get("claudeAiOauth") if isinstance(data.get("claudeAiOauth"), dict) else data
+    token = oauth.get("accessToken") or oauth.get("access_token")
+    if isinstance(token, str) and token:
+        return token
+    fallback = env.get("CLAUDE_CODE_OAUTH_TOKEN")
+    return fallback if isinstance(fallback, str) and fallback else None
+
+
+def claude_sign_in_note(
+        env,
+):
+    """Why the Claude sign-in could not be read, without including its contents.
+
+    Args:
+        env: Environment mapping used to find the credentials file.
+
+    Returns:
+        A short note such as missing_file, bad_json, or the key names that were present.
+    """
+    path = claude_credentials_path(env)
+    if not path.is_file():
+        return "missing_file"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except OSError:
+        return "unreadable"
+    except ValueError:
+        return "bad_json"
+    if not isinstance(data, dict):
+        return "bad_json"
+    oauth = data.get("claudeAiOauth")
+    source = oauth if isinstance(oauth, dict) else data
+    token = source.get("accessToken") if isinstance(source, dict) else None
+    if token is None:
+        kind = "missing"
+    elif isinstance(token, str):
+        kind = "empty" if not token else "str"
+    else:
+        kind = type(token).__name__
+    return ("token_" + kind)[:40]
+
+
+def claude_usage_from_body(
+        payload,
+):
+    """Read Claude's 5-hour and weekly utilization down to two public bars.
+
+    Args:
+        payload: JSON object with five_hour and seven_day utilization.
+
+    Returns:
+        A usage object with 5h and Weekly windows, or None when both are missing.
+    """
+    if not isinstance(payload, dict):
+        return None
+    primary = usage_window(payload.get("five_hour"), "utilization", 300)
+    secondary = usage_window(payload.get("seven_day"), "utilization", 10080)
+    if primary:
+        primary["label"] = "5h"
+    if secondary:
+        secondary["label"] = "Weekly"
+    if primary is None and secondary is None:
+        return None
+    return {"primary": primary, "secondary": secondary}
+
+
+def fetch_claude_usage(
+        env,
+        opener=None,
+        now=None,
+):
+    """Ask Claude for allowance percents. The token is not included in the result.
+
+    Args:
+        env: Environment mapping used to find the local sign-in and the cache.
+        opener: Callable matching urllib.request.urlopen, for tests.
+        now: Current Unix time, or None to use the clock.
+
+    Returns:
+        A usage-only Claude event, or None when a recent sample exists or the service is unavailable.
+    """
+    now = time.time() if now is None else now
+    if now - fetched_at(env, "claude") < CLAUDE_USAGE_INTERVAL:
+        return None
+    stamp_fetch(env, "claude", now)
+    token = read_claude_token(env)
+    if not token:
+        note_fetch(env, "claude", claude_sign_in_note(env))
         return None
     request = urllib.request.Request(
-        "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
-        data=b"{}",
+        "https://api.anthropic.com/api/oauth/usage",
         headers={
             "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
-            "Connect-Protocol-Version": "1",
+            "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json",
         },
-        method="POST",
+        method="GET",
     )
     try:
         with (opener or urllib.request.urlopen)(request, timeout=5) as response:
             body = json.loads(response.read().decode("utf-8", "ignore"))
-    except (OSError, ValueError):
+    except urllib.error.HTTPError as exc:
+        note_fetch(env, "claude", "http_" + str(exc.code))
         return None
-    usage = cursor_usage_from_body(body)
+    except (OSError, ValueError) as exc:
+        note_fetch(env, "claude", "bad_json" if isinstance(exc, ValueError) else type(exc).__name__)
+        return None
+    usage = claude_usage_from_body(body)
     if not usage:
+        note_fetch(env, "claude", "unrecognized")
         return None
-    return {"session_id": "usage:cursor", "event": "UsageUpdate", "agent": "cursor", "usage": usage}
+    event = {"session_id": "usage:claude", "event": "UsageUpdate", "agent": "claude", "usage": usage}
+    remember_usage(event, env)
+    return event
 
 
 def _header_fields(
@@ -961,9 +1347,9 @@ def prime_events(
     """Usage samples and already-open sessions to publish when piDeck starts.
 
     Args:
-        env: Environment mapping for home, cache, and the Cursor sign-in.
+        env: Environment mapping for home, cache, and the local sign-ins.
         now: Current Unix time, or None to use the clock.
-        opener: Optional urlopen replacement for the Cursor usage request.
+        opener: Optional urlopen replacement for the Claude and Cursor usage requests.
 
     Returns:
         Events safe to post: percentages, project names, and states. No prompts.
@@ -973,6 +1359,9 @@ def prime_events(
     stale = float(env.get("PIDECK_PRIME_HOURS") or 6) * 3600
     events = cached_usage_events(env)
     events.extend(discover_sessions(home, now, stale))
+    claude = fetch_claude_usage(env, opener, now)
+    if claude:
+        events.append(claude)
     cursor = fetch_cursor_usage(env, opener)
     if cursor:
         events.append(cursor)

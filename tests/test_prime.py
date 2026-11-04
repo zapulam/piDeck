@@ -3,6 +3,7 @@ import json
 import sqlite3
 import sys
 import time
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
@@ -87,7 +88,10 @@ def test_cursor_usage_posts_percents_and_not_the_token(
 
         return Response()
 
-    event = hook.fetch_cursor_usage({"CURSOR_STATE_DB": str(db)}, opener)
+    event = hook.fetch_cursor_usage(
+        {"CURSOR_STATE_DB": str(db), "PIDECK_CONFIG": str(tmp_path / "hook.json")},
+        opener,
+    )
     assert seen == {"auth": "Bearer secret-token", "timeout": 5}
     assert event["agent"] == "cursor" and event["event"] == "UsageUpdate"
     assert event["usage"]["primary"] == {
@@ -101,6 +105,75 @@ def test_cursor_usage_posts_percents_and_not_the_token(
     })
     assert round(dashboard["primary"]["used_pct"], 1) == 75.8
     assert dashboard["secondary"]["used_pct"] == 0.7
+    snake = hook.cursor_usage_from_body({
+        "billing_cycle_end": 2_000_000_000,
+        "individual_usage": {"plan": {"included_spend": 20, "limit": 100, "api_percent_used": 4}},
+    })
+    assert snake["primary"]["used_pct"] == 20
+    assert snake["secondary"]["label"] == "API"
+
+
+def test_cursor_usage_refreshes_an_expired_access_token(
+        tmp_path,
+):
+    """A rejected access token is refreshed once, and neither token is posted."""
+    db = tmp_path / "state.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("create table ItemTable (key text primary key, value text)")
+    conn.execute("insert into ItemTable values (?, ?)", ("cursorAuth/accessToken", "secret-token"))
+    conn.execute("insert into ItemTable values (?, ?)", ("cursorAuth/refreshToken", "refresh-secret"))
+    conn.commit()
+    conn.close()
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        assert timeout == 5
+        if request.full_url.endswith("/oauth/token"):
+
+            class Refresh:
+                def read(self):
+                    return json.dumps({"access_token": "fresh-token", "shouldLogout": False}).encode()
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+            return Refresh()
+        if calls.count(request.full_url) == 1:
+            raise urllib.error.HTTPError(request.full_url, 401, "expired", None, None)
+
+        class Response:
+            def read(self):
+                return json.dumps({
+                    "planUsage": {"includedSpend": 10, "limit": 100, "apiPercentUsed": 2},
+                    "billingCycleEnd": 2_000_000_000,
+                }).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        return Response()
+
+    event = hook.fetch_cursor_usage(
+        {"CURSOR_STATE_DB": str(db), "PIDECK_CONFIG": str(tmp_path / "hook.json")},
+        opener,
+    )
+    assert [path.split("cursor.sh", 1)[-1] for path in calls] == [
+        "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+        "/oauth/token",
+        "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+    ]
+    assert event["usage"]["primary"]["used_pct"] == 10
+    dumped = json.dumps(event) + (tmp_path / "usage-cache.json").read_text(encoding="utf-8")
+    assert "secret-token" not in dumped
+    assert "refresh-secret" not in dumped
+    assert "fresh-token" not in dumped
 
 
 def test_cached_claude_usage_is_reposted(
@@ -121,3 +194,44 @@ def test_cached_claude_usage_is_reposted(
         "usage": {"primary": {"used_pct": 12, "window_minutes": 300, "resets_at": None}},
     }]
     assert "private" not in (tmp_path / "usage-cache.json").read_text(encoding="utf-8")
+
+
+def test_claude_usage_posts_percents_and_backs_off(
+        tmp_path,
+):
+    """The local Claude sign-in fills 5h and weekly bars, and a recent sample is not asked again."""
+    creds = tmp_path / "credentials.json"
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret-token"}}), encoding="utf-8")
+    env = {"CLAUDE_CREDENTIALS": str(creds), "PIDECK_CONFIG": str(tmp_path / "hook.json")}
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.get_header("Authorization"))
+        assert request.get_header("Anthropic-beta") == "oauth-2025-04-20"
+        assert timeout == 5
+
+        class Response:
+            def read(self):
+                return json.dumps({
+                    "five_hour": {"utilization": 22, "resets_at": "2026-11-04T12:00:00Z"},
+                    "seven_day": {"utilization": 41, "resets_at": "2026-11-08T12:00:00Z"},
+                }).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        return Response()
+
+    event = hook.fetch_claude_usage(env, opener, now=1_000_000)
+    assert calls == ["Bearer secret-token"]
+    assert event["usage"]["primary"]["label"] == "5h"
+    assert event["usage"]["primary"]["used_pct"] == 22
+    assert event["usage"]["secondary"]["label"] == "Weekly"
+    assert event["usage"]["secondary"]["used_pct"] == 41
+    dumped = json.dumps(event) + (tmp_path / "usage-cache.json").read_text(encoding="utf-8")
+    assert "secret-token" not in dumped
+    assert hook.fetch_claude_usage(env, opener, now=1_000_100) is None
+    assert calls == ["Bearer secret-token"]
