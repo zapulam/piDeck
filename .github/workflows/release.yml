@@ -81,16 +81,30 @@ jobs:
           git archive --format=zip --prefix="piDeck-$RELEASE_VERSION/" --output="dist/piDeck-$RELEASE_VERSION-source.zip" HEAD
           python scripts/release_metadata.py checksums --directory dist
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        if: ${{ !github.event.repository.private || github.event.repository.owner.type != 'User' }}
         with:
           subject-path: dist/*
+      - name: Report unsupported private-repository attestations
+        if: ${{ github.event.repository.private && github.event.repository.owner.type == 'User' }}
+        run: |
+          echo 'GitHub does not support stored artifact attestations for user-owned private repositories. Source downloads are verified with SHA256SUMS; tagged-commit CI passed before publication.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           KEEP_DRAFT: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
           REPLACE_ASSETS: ${{ github.event_name == 'workflow_dispatch' && inputs.replace_assets }}
+          PRIVATE_USER_REPO: ${{ github.event.repository.private && github.event.repository.owner.type == 'User' }}
         run: |
           NOTES_FILE="docs/releases/$RELEASE_TAG.md"
+          if [ "$PRIVATE_USER_REPO" = true ]; then
+            RELEASE_NOTES="$RUNNER_TEMP/release-notes.md"
+            printf '%s\n\n' '**Download verification:** GitHub does not support stored artifact attestations for user-owned private repositories. This release provides SHA256SUMS and was built only after full CI passed for the exact tagged commit.' > "$RELEASE_NOTES"
+            if [ -f "$NOTES_FILE" ]; then
+              cat "$NOTES_FILE" >> "$RELEASE_NOTES"
+            fi
+            NOTES_FILE="$RELEASE_NOTES"
+          fi
           if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-draft" 2>/dev/null; then
             if [ "$(cat "$RUNNER_TEMP/release-draft")" != true ] && [ "$REPLACE_ASSETS" != true ]; then
               echo "Published release unchanged. An explicit manual replace_assets run is required."
