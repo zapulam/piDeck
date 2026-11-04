@@ -6,7 +6,7 @@ Run piDeck in a native desktop window with an optional loopback-only server.
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import argparse
 import contextlib
@@ -239,6 +239,7 @@ def native_self_test(
     from .credentials import NAMES, SecretStore
 
     errors = []
+    ready = threading.Event()
     original_create, original_start = webview.create_window, webview.start
 
     def create_hidden(
@@ -270,13 +271,12 @@ def native_self_test(
                 raise RuntimeError("Native page did not load")
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                if window.evaluate_js("Boolean(S.initialized && document.querySelector('#login').hidden)"):
+                window.run_js("if (S.initialized && document.querySelector('#login').hidden && !location.hash) "
+                              "fetch('/api/desktop/native-check', authInit({method:'POST'}));")
+                if ready.wait(0.1):
                     break
-                time.sleep(0.1)
             else:
                 raise RuntimeError("Native display authentication failed")
-            if window.evaluate_js("location.hash"):
-                raise RuntimeError("Native bootstrap credential was not removed")
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(json.dumps({"ok": True, "platform": sys.platform,
                               "checks": ["native-window", "private-session", "websocket-snapshot", "bootstrap-erased"]}), encoding="utf-8")
@@ -294,7 +294,7 @@ def native_self_test(
                 patch("pideck.desktop.data_directory", return_value=Path(temporary) / "profile"), \
                 patch.object(webview, "start", lambda **kwargs: original_start(inspect, **kwargs)):
             try:
-                run_desktop(config_path=config, port=0)
+                run_desktop(config_path=config, port=0, native_test=ready.set)
             finally:
                 if store.vault:
                     for name in ("PIDECK_TOKEN", "PIDECK_HOOK_TOKEN"):
@@ -310,6 +310,7 @@ def run_desktop(
     port: int | None = None,
     url: str | None = None,
     on_top: bool = False,
+    native_test: Callable[[], None] | None = None,
     ) -> None:
     """
     Open a resizable native window on Windows or macOS using the existing piDeck UI.
@@ -321,6 +322,7 @@ def run_desktop(
         port (int | None): Local server port override; ignored for an existing server URL.
         url (str | None): Existing piDeck address, or None to start a local server.
         on_top (bool): Whether to keep the window above other windows.
+        native_test (Callable[[], None] | None): Isolated native-test callback, absent in normal runs.
 
     Returns:
         None: No value is returned.
@@ -344,6 +346,8 @@ def run_desktop(
     with ownership as window:
         if window is None:
             return
+        if native_test is not None:
+            window["native_check"] = native_test
         source = nullcontext(url) if url is not None else local_server(config, mock, port, window=window)
         with source as address:
             if url is None and not mock:

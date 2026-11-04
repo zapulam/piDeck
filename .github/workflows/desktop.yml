@@ -63,6 +63,20 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-lock.txt
       - name: Build and smoke-test the native installer
         run: python scripts/build_desktop.py
+      - name: Verify Windows installer lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/installers/*-setup.exe).FullName
+          ./scripts/check_windows_installer.ps1 -Installer $installer
+      - name: Verify Mac disk image and application signature structure
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          hdiutil verify dist/installers/*.dmg
+          codesign --verify --deep --strict dist/piDeck.app
+          test -x dist/piDeck.app/Contents/MacOS/piDeck
+          test -x dist/piDeck.app/Contents/MacOS/piDeck-hook
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: piDeck-${{ matrix.name }}-unsigned

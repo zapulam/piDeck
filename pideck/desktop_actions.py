@@ -163,6 +163,8 @@ class DesktopActions:
                 raise ValueError("Install Claude Code, Codex, or Cursor first, then connect again")
         elif action == "spotify-connect":
             self.connect_spotify()
+        elif action == "native-check" and self.window.get("native_check") is not None:
+            self.window["native_check"]()
         elif action == "activate" and self.window.get("native") is not None:
             self.window["native"].show()
             self.window["native"].restore()
