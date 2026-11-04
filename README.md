@@ -16,8 +16,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: agents, an attention alert, now playing, Slack, and a finished alert"><br>
-  <sub>A walkthrough of the Agents, Playing and Slack pages on an 800×480 display running <code>--mock</code> data. Album art is the property of its owners and is shown for illustration only.</sub>
+  <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: provider groups, account usage, pixel thinking bubbles, a completion celebration and checkmark, settings, now playing, and Slack"><br>
+  <sub>The current Agents, Settings, Playing and Slack views on an 800×480 display: gentle sprite hops, pixel thinking bubbles, and full-screen completion celebrations. All sessions, usage values, messages and album art are mock examples.</sub>
 </p>
 
 ## How it works
@@ -52,7 +52,7 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 - **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Account cards show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
 - **Codex CLI** — the same tiles, context bars, and account usage cards. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
-- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. Account allowances are unavailable through the hook interface. [Setup](#cursor)
+- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. Included and API allowance bars use the sign-in already on this computer. [Setup](#cursor)
 - **Spotify** — now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
 - **Slack** — DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
 
@@ -190,7 +190,9 @@ python -m playwright install chromium
 pytest -m browser
 ```
 
-CI runs tests on Linux, Windows, and macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The stable required check is **CI passed**, which succeeds only after every validation job passes.
+CI runs tests on Linux, Windows, and Intel macOS with Python 3.11 and 3.13; Chromium tests check the real websocket UI at four window sizes. macOS 26 uses the Intel runner pool because GitHub's ARM pool has been cancelling jobs before any test starts. It also checks Python/JavaScript syntax, workflow validity, commit attribution, and dependency vulnerabilities. The stable required check is **CI passed**, which succeeds only after every validation job passes.
+
+Regenerate the README walkthrough from isolated mock data with `pip install Pillow` and `python scripts/record_demo.py` after installing the development dependencies and Playwright Chromium above. The recorder uses the real UI and does not read account credentials or session transcripts.
 
 All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-only repository access; only the release publication job receives release and attestation permissions. Dependencies are updated manually, with a weekly vulnerability audit and audits on every PR. Version-update PRs from Dependabot are disabled to avoid adding bot-authored commits. AI-assisted contributions and Claude, Codex, and Cursor credit trailers are welcome. The attribution gate requires human authors and committers and rejects Dependabot and other bot credit trailers; human and AI tool credits remain allowed.
 
@@ -200,7 +202,9 @@ The version in `pideck/__init__.py` is the source of truth. After merging a test
 
 Each release includes a source ZIP (for cloning alternatives, Pi installs, and archival), `SHA256SUMS`, and GitHub build-provenance attestations. Desktop Windows/macOS installs use the setup scripts in this repository rather than platform binaries. You can check downloads with `sha256sum --check SHA256SUMS` and verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`.
 
-Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads assets, and then publishes only when requested; an interrupted draft can be retried, but published releases are never overwritten. A draft build still runs the full CI pipeline.
+Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads assets, and then publishes only when requested; an interrupted draft can be retried. A draft build still runs the full CI pipeline. Release notes come from `docs/releases/<tag>.md` when present.
+
+Refreshing an already published release requires an explicit manual **Release** run with **Replace assets of an existing published release** enabled. This reruns CI on the exact tagged commit before replacing the source archive, checksums, and notes and producing fresh attestations. Retargeting a published tag requires explicit authorization; the workflow never moves tags itself.
 
 When accepting dependency or AI-assisted updates on Zachary's behalf, keep `Zachary <84103628+zapulam@users.noreply.github.com>` as author and committer and include the assisting tool's own `Co-authored-by` trailer. Preserve human and AI tool credits in pull requests and squash commits, while removing Dependabot and other bot credits. Squash merges default to commit messages; review the merge message to retain tool credit trailers. Repository guidance documents this policy; Claude Code uses its default attribution because the project no longer overrides it. Tool credit trailers can add the credited tools to GitHub's contributor display.
 

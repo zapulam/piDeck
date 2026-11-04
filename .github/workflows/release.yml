@@ -13,6 +13,10 @@ on:
         description: Keep the release as a draft for review
         type: boolean
         default: true
+      replace_assets:
+        description: Replace assets of an existing published release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -84,12 +88,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           KEEP_DRAFT: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
+          REPLACE_ASSETS: ${{ github.event_name == 'workflow_dispatch' && inputs.replace_assets }}
         run: |
+          NOTES_FILE="docs/releases/$RELEASE_TAG.md"
           if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-draft" 2>/dev/null; then
-            test "$(cat "$RUNNER_TEMP/release-draft")" = true
+            if [ "$(cat "$RUNNER_TEMP/release-draft")" != true ] && [ "$REPLACE_ASSETS" != true ]; then
+              echo "Published release unchanged. An explicit manual replace_assets run is required."
+              exit 1
+            fi
             gh release upload "$RELEASE_TAG" dist/* --clobber
+            if [ -f "$NOTES_FILE" ]; then
+              gh release edit "$RELEASE_TAG" --notes-file "$NOTES_FILE"
+            fi
           else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "piDeck $RELEASE_TAG" --generate-notes
+            if [ -f "$NOTES_FILE" ]; then
+              gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "piDeck $RELEASE_TAG" --notes-file "$NOTES_FILE"
+            else
+              gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "piDeck $RELEASE_TAG" --generate-notes
+            fi
           fi
           if [[ "$RELEASE_TAG" == *-* ]]; then
             gh release edit "$RELEASE_TAG" --prerelease=true

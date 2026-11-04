@@ -31,7 +31,9 @@ jobs:
         include:
           - os: macos-15-intel
             python: "3.11"
-          - os: macos-26
+          # The ARM pool can cancel queued jobs before any step starts. Keep
+          # macOS 26 / Python 3.13 coverage on the available Intel runner pool.
+          - os: macos-26-intel
             python: "3.13"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
