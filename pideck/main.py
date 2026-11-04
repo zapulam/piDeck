@@ -56,7 +56,8 @@ class UiSettingsBody(BaseModel):
     views: list[str]
 
 
-def create_app(config_path: str | None = None, mock: Optional[bool] = None, lively: bool = True) -> FastAPI:
+def create_app(config_path: str | None = None, mock: Optional[bool] = None, lively: bool = True,
+               prime: bool = False) -> FastAPI:
     config_file = Path(config_path) if config_path else Path("config.yaml")
     cfg = load_config(config_path)
     if mock is not None:
@@ -97,6 +98,16 @@ def create_app(config_path: str | None = None, mock: Optional[bool] = None, live
                 tasks.append(asyncio.create_task(SlackSource(feed, mods["slack"]).run()))
         if mods["agents"]["enabled"]:
             tasks.append(asyncio.create_task(agents.prune_forever()))
+            if prime:
+                from .local_prime import launch_prime
+
+                async def _refresh_prime() -> None:
+                    """Reload local sessions and allowance bars until the server stops."""
+                    while True:
+                        await asyncio.to_thread(launch_prime)
+                        await asyncio.sleep(900)
+
+                tasks.append(asyncio.create_task(_refresh_prime()))
         yield
         for t in tasks:
             t.cancel()

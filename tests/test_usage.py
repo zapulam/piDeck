@@ -122,6 +122,13 @@ def test_claude_statusline_uses_reported_context_and_handles_missing_windows():
     assert iso["used_pct"] == 40 and iso["resets_at"] > 1_700_000_000
     kept = hook.usage_window({"utilization": 12, "resets_at": "not-a-time"}, "used_percentage", 300)
     assert kept == {"used_pct": 12, "window_minutes": 300, "resets_at": None}
+    derived = hook.build_statusline_event({"session_id": "s", "context_window": {
+        "used_percentage": None, "context_window_size": 1000000,
+        "current_usage": {"input_tokens": 100000, "cache_read_input_tokens": 50000,
+                          "cache_creation_input_tokens": 0},
+    }, "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": "2026-11-04T18:00:00Z"}}})
+    assert derived["context_pct"] == 15
+    assert derived["usage"]["primary"]["label"] == "5h" and derived["usage"]["primary"]["used_pct"] == 10
 
 
 """# --- Status-line lifecycle ---"""

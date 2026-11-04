@@ -103,6 +103,12 @@ $link.IconLocation = Join-Path $Root "pideck\assets\pideck.ico"
 $link.Description = "piDeck"
 $link.Save()
 Write-Host "Wrote $shortcut"
+$programs = [Environment]::GetFolderPath("Programs")
+if ($programs) {
+    $startLink = Join-Path $programs "piDeck.lnk"
+    Copy-Item $shortcut $startLink -Force
+    Write-Host "Start menu: $startLink"
+}
 if ($Startup) {
     $startupLink = Join-Path ([Environment]::GetFolderPath("Startup")) "piDeck.lnk"
     Copy-Item $shortcut $startupLink -Force
@@ -123,7 +129,7 @@ if (-not $NoHooks) {
 
 Write-Host ""
 Write-Host "Setup complete."
-Write-Host "  Start the window:  .\piDeck.lnk   (raspberry icon; pin this)"
+Write-Host "  Start menu:        search for piDeck"
 Write-Host "                     .\run-desktop.cmd"
 Write-Host "  Demo data:         .\run-desktop.cmd --mock"
 Write-Host "  Or open a browser: .\.venv\Scripts\python.exe -m pideck --mock"

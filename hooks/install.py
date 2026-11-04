@@ -26,9 +26,9 @@ from pathlib import Path
 
 MARK = "pideck_hook.py"  # how we recognise our own hook entries
 
-CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SessionEnd"]
+CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SubagentStart", "SubagentStop", "SessionEnd"]
 CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]  # Codex has no Notification/SessionEnd
-CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "sessionEnd"]
+CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "subagentStart", "subagentStop", "sessionEnd"]
 
 
 class InstallError(Exception):
@@ -161,7 +161,11 @@ def install_statusline(
     data = read_json(path)
     original = data.get("statusLine")
     if _is_ours(original or {}):
-        return False
+        if original.get("refreshInterval") == 60:
+            return False
+        original["refreshInterval"] = 60
+        data["statusLine"] = original
+        return write_json(path, data, dry)
     if not dry:
         cfg = conf_dir(home) / "hook.json"
         saved = read_json(cfg)
@@ -171,6 +175,7 @@ def install_statusline(
         **(original or {}),
         "type": "command",
         "command": command_for(script, "claude") + " --statusline",
+        "refreshInterval": 60,
     }
     return write_json(path, data, dry)
 
@@ -237,7 +242,9 @@ def save_settings(home: Path, url: str, token: str, dry: bool) -> Path:
             conf = json.loads(f.read_text())
         except Exception:
             conf = {}
-        conf.update({"url": url, "token": token})
+        conf["url"] = url
+        if token or "token" not in conf:
+            conf["token"] = token
         f.write_text(json.dumps(conf, indent=2) + "\n")
         try:
             os.chmod(f, stat.S_IRUSR | stat.S_IWUSR)  # the token lives here: owner only

@@ -39,6 +39,7 @@ class UsageWindow(BaseModel):
     used_pct: float = Field(ge=0, le=100, allow_inf_nan=False)
     window_minutes: int = Field(gt=0, le=525600)
     resets_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    label: Optional[str] = Field(None, max_length=24)
 
 
 class AccountUsage(BaseModel):
@@ -53,11 +54,13 @@ class AgentEvent(BaseModel):
     event: Optional[str] = Field(None, max_length=64)      # Claude Code hook_event_name
     state: Optional[str] = Field(None, max_length=16)      # explicit override (idle/working/waiting/done/error)
     name: Optional[str] = Field(None, max_length=64)       # tile label; defaults to the cwd folder name
+    detail: Optional[str] = Field(None, max_length=64)     # extra public label, such as a model slug
     cwd: Optional[str] = Field(None, max_length=512)
     agent: Optional[str] = Field(None, max_length=16)      # which tool: claude (default) or codex
     context_pct: Optional[float] = Field(None, ge=0, le=100)
     usage: Optional[AccountUsage] = None
     message: Optional[str] = Field(None, max_length=500)
+    parent_id: Optional[str] = Field(None, max_length=128)  # set when this tile is a subagent
 
 
 """# --- Session registry ---"""
@@ -102,6 +105,8 @@ class AgentRegistry:
         agent = {
             "id": ev.session_id,
             "name": name,
+            "detail": ev.detail or (cur or {}).get("detail"),
+            "parent_id": ev.parent_id or (cur or {}).get("parent_id"),
             "agent": kind,
             "cwd": ev.cwd or (cur or {}).get("cwd"),
             "state": new_state,

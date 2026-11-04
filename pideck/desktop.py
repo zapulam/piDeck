@@ -96,7 +96,7 @@ def local_server(
     if not mock:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         ensure_token(str(config_path))
-    app = create_app(str(config_path), mock=True if mock else None)
+    app = create_app(str(config_path), mock=True if mock else None, prime=not mock)
     selected_port = int(port if port is not None else cfg["server"]["port"])
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         # Bind before starting the worker so port conflicts are reported in the main thread.

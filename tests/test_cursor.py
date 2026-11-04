@@ -70,6 +70,53 @@ def test_cursor_failures_and_cancellation(
     assert client.post("/api/agents/event", json=event).json()["agent"]["state"] == expected
 
 
+def test_cursor_detail_names_the_model_and_keeps_prompts_off_the_tile(
+        client,
+):
+    """Two chats in one project stay distinct via a public model label, not the prompt."""
+    payload = {"hook_event_name": "beforeSubmitPrompt", "conversation_id": "c",
+               "workspace_roots": ["/work/project"], "model": "composer-2.5", "composer_mode": "ask",
+               "prompt": "private prompt", "user_email": "private@example.com"}
+    event = hook.build_event(payload, {}, "cursor")
+    assert event["detail"] == "ask · composer-2.5"
+    assert "private" not in json.dumps(event)
+    agent = client.post("/api/agents/event", json=event).json()["agent"]
+    assert agent["detail"] == "ask · composer-2.5" and agent["name"] == "project"
+    later = hook.build_event({"hook_event_name": "stop", "conversation_id": "c", "status": "completed"}, {}, "cursor")
+    kept = client.post("/api/agents/event", json=later).json()["agent"]
+    assert kept["detail"] == "ask · composer-2.5" and "private" not in json.dumps(kept)
+
+
+def test_cursor_subagent_is_tagged_to_its_parent_without_the_task():
+    """A child agent is its own tile, linked to the parent, and its task stays local."""
+    payload = {"hook_event_name": "subagentStart", "subagent_id": "child",
+               "parent_conversation_id": "parent", "subagent_type": "generalPurpose",
+               "subagent_model": "composer-2.5", "task": "private task text",
+               "workspace_roots": ["C:/work/project"]}
+    event = hook.build_event(payload, {}, "cursor")
+    assert event["session_id"] == "cursor:sub:child"
+    assert event["parent_id"] == "cursor:parent"
+    assert (event["name"], event["detail"], event["event"]) == ("generalPurpose", "composer-2.5", "UserPromptSubmit")
+    assert "private" not in json.dumps(event)
+    assert hook.cursor_hook_response("subagentStart") == {"permission": "allow"}
+    stop = hook.build_event({"hook_event_name": "subagentStop", "subagent_id": "child",
+                             "parent_conversation_id": "parent", "subagent_type": "generalPurpose",
+                             "status": "completed", "summary": "private summary"}, {}, "cursor")
+    assert stop["session_id"] == "cursor:sub:child" and stop["event"] == "Stop"
+    assert "private" not in json.dumps(stop)
+
+
+def test_claude_subagent_keeps_the_parent_session_id():
+    """Claude reports the parent session_id; the child tile must not replace that chat."""
+    event = hook.build_event({
+        "hook_event_name": "SubagentStart", "session_id": "parent", "agent_id": "child",
+        "agent_type": "Explore", "cwd": "/work/project", "last_assistant_message": "private reply",
+    }, {}, "claude")
+    assert event["session_id"] == "parent:child" and event["parent_id"] == "parent"
+    assert event["name"] == "Explore" and event["event"] == "UserPromptSubmit"
+    assert "private" not in json.dumps(event)
+
+
 def test_cursor_ignores_unrelated_hooks_and_invalid_context():
     """Missing conversation identity and non-agent hooks cannot create anonymous tiles."""
     assert hook.build_event({"hook_event_name": "workspaceOpen"}, {}, "cursor") is None

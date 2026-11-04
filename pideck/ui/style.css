@@ -37,9 +37,14 @@ h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .18em; text-transform: u
   display: flex; justify-content: space-between; align-items: baseline; }
 h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 
-#pager { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; height: 44px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+#pager { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; height: 44px; display: flex; justify-content: flex-start; align-items: center; gap: 4px; padding: 0 8px; }
+#pager-pages { flex: 1; display: flex; justify-content: center; align-items: center; gap: 10px; min-width: 0; }
 #pager button { position: relative; background: none; border: 0; color: var(--dim); font: 600 12px var(--font); letter-spacing: .12em;
   text-transform: uppercase; padding: 10px 14px; border-radius: 999px; }
+#pager #settings-btn { letter-spacing: 0; text-transform: none; padding: 4px; width: 32px; height: 32px; flex: none; display: grid; place-items: center; }
+#settings-panel { position: absolute; z-index: 6; left: 12px; right: 12px; bottom: 52px; max-height: min(70%, 420px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 8px; box-shadow: 0 16px 40px rgba(0,0,0,.45); }
+#settings-panel[hidden] { display: none; }
 button, #alert, .done-card { cursor: pointer; }
 #pager button.on { color: var(--text); background: rgba(255,255,255,.1); }
 #pager .badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--waiting);
@@ -74,12 +79,18 @@ button, #alert, .done-card { cursor: pointer; }
 .tile .name { font-size: 13px; font-weight: 700; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile .meta { font-size: 11px; color: var(--dim); white-space: nowrap; }
 .tile .meta b { color: var(--c); font-weight: 600; }
+.tile .tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 10px; letter-spacing: .04em; }
+.agent-group { margin: 0 0 14px; }
+.agent-group h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
 .tile[data-state=working] { --c: var(--working); border-color: var(--working); }
+.tile[data-state=working] canvas { animation: hop .55s ease-in-out infinite; }
 .tile[data-state=waiting] { --c: var(--waiting); border-color: var(--waiting); animation: glow 1.4s ease-in-out infinite; }
 .tile[data-state=done]    { --c: var(--done); border-color: var(--done); }
+.tile[data-state=done] .meta b { color: #fff; }
 .tile[data-state=idle]    { --c: var(--idle); border-color: var(--idle); }
 .tile[data-state=error]   { --c: var(--error); border-color: var(--error); }
 @keyframes glow { 50% { box-shadow: 0 0 18px -2px var(--waiting); } }
+@keyframes hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
 .empty { color: var(--dim); text-align: center; padding: 60px 20px; line-height: 1.7; font-size: 13px; }
 .empty code { color: var(--text); }
 
@@ -133,10 +144,10 @@ button, #alert, .done-card { cursor: pointer; }
 #done-stack { position: absolute; z-index: 11; right: 18px; bottom: 58px; width: 230px; height: 210px; pointer-events: none; }
 #done-stack:empty { display: none; }
 .done-card { position: absolute; right: 0; bottom: 0; width: 196px; pointer-events: auto; display: flex; gap: 8px; align-items: center;
-  padding: 10px; border: 2px solid var(--done); border-radius: 14px; background: #10241e;
+  padding: 10px; border: 2px solid var(--done); border-radius: 14px; background: #10241e; color: #fff;
   box-shadow: 0 14px 28px rgba(0,0,0,.45); transform: translate(var(--x), var(--y)) rotate(var(--rot)); }
 .done-card canvas { width: 42px; height: 42px; image-rendering: pixelated; flex: none; }
-.done-card b { display: block; font-size: 13px; }
+.done-card b { display: block; font-size: 13px; color: #fff; }
 .done-card span { display: block; margin-top: 2px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 @keyframes pop { from { transform: scale(.96); opacity: 0; } }
 
