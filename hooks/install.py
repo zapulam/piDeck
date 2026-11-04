@@ -26,9 +26,9 @@ from pathlib import Path
 
 MARK = "pideck_hook.py"  # how we recognise our own hook entries
 
-CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SessionEnd"]
+CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SubagentStart", "SubagentStop", "SessionEnd"]
 CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]  # Codex has no Notification/SessionEnd
-CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "sessionEnd"]
+CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "subagentStart", "subagentStop", "sessionEnd"]
 
 
 class InstallError(Exception):

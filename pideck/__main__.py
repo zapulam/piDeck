@@ -53,7 +53,7 @@ def main() -> None:
     generated = False
     if not a.mock:
         _, generated = ensure_token(a.config)
-    app = create_app(a.config, mock=True if a.mock else None)
+    app = create_app(a.config, mock=True if a.mock else None, prime=not a.mock)
     port = a.port or cfg["server"]["port"]
     if not a.mock:
         tok = os.environ["PIDECK_TOKEN"]

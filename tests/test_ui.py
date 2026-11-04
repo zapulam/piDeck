@@ -73,6 +73,17 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     assert len(tags) == 2 and len(set(tags)) == 2
                     seeds = same.evaluate_all("els => els.map(el => el.dataset.seed)")
                     assert len(set(seeds)) == 2
+                    client.post("api/agents/event", json={
+                        "session_id": "usage:cursor", "event": "UsageUpdate", "agent": "cursor",
+                        "usage": {"primary": {"used_pct": 40, "window_minutes": 43200, "label": "Included"},
+                                  "secondary": {"used_pct": 5, "window_minutes": 43200, "label": "API"}},
+                    })
+                    page.locator('.usage-meter[data-provider="cursor"]', has_text="Included").wait_for()
+                    client.post("api/agents/event", json={
+                        "session_id": "ui-done:explore", "state": "working", "name": "Explore",
+                        "agent": "claude", "parent_id": "ui-done",
+                    })
+                    page.locator('[data-id="ui-done:explore"] .tag', has_text="sub of notes").wait_for()
                 assert not errors
             finally:
                 screenshots = Path("test-results/browser")

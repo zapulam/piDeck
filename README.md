@@ -159,7 +159,11 @@ It merges piDeck's flat hook entries into `~/.cursor/hooks.json`, preserves othe
 
 Conversation IDs produce one tile across turns. Prompt submission and tool completion report working; `stop` reports done, cancelled, or error; session end removes the tile. A denied tool reports needs-you, although hooks do not provide a general signal for every approval prompt. piDeck does not block actions or send follow-up prompts, and it does not forward your prompts, email address, or tool inputs.
 
-Cursor exposes `context_usage_percent` on `preCompact`, rather than a continuous context feed. piDeck labels that bar **Before compact** and clears it on the next lifecycle update so the pre-compaction snapshot is not mistaken for current usage. Account allowance percentages are not part of Cursor's documented hooks, so its account card says unavailable instead of showing Claude/Codex-style quota bars. No personal billing cookies or private usage endpoints are used. Live Cursor integration still needs verification with your installed version.
+Cursor exposes `context_usage_percent` on `preCompact`, rather than a continuous context feed. piDeck labels that bar **Before compact** and clears it on the next lifecycle update so the pre-compaction snapshot is not mistaken for current usage. Account bars come from Cursor's own usage service: piDeck reads the sign-in already stored in Cursor's local database and posts only the Included and API percents. The access token is not sent to the display. If that sign-in cannot be read, the card stays unavailable.
+
+When the display starts, and again every 15 minutes, it reads Claude, Codex, and Cursor session files touched in the last six hours and shows those chats even if they began before piDeck was open. A file touched in the last two minutes is shown as working; an older one is idle. Claude's account bars are remembered from the last status-line report, because Claude does not write those percents into the session file. Codex bars are read from the newest local session log. Re-run the hook installer so subagent events are registered.
+
+A Claude or Cursor subagent gets its own tile, named for its agent type and tagged `sub of` the parent project. The task text and the subagent's reply are not sent. Codex does not currently emit a subagent hook piDeck can subscribe to.
 
 ### Spotify
 

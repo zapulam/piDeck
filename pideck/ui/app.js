@@ -105,7 +105,9 @@ function tileHtml(a, peers) {
   const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
   const status = a.state === "working" ? "working" : a.state === "waiting" ? "needs you" : a.state;
   const same = peers.filter((b) => b.name === a.name);
+  const parent = a.parent_id && S.agents.find((b) => b.id === a.parent_id);
   const bits = [];
+  if (parent) bits.push("sub of " + parent.name);
   if (a.detail) bits.push(a.detail);
   if (same.length > 1) bits.push("#" + sessionTag(a.id));
   const mark = bits.join(" · ");
@@ -130,15 +132,16 @@ function renderUsage(list) {
     list.some((a) => (a.agent || "claude") === kind) ||
     now - (S.agent_usage[kind]?.updated_at || 0) < S.cfg.agents_stale_hours * 3600
   ).map(([kind, name]) => {
-    if (kind === "cursor") return `<div class="usage-meter" data-provider="cursor"><b>Cursor</b>
-      <div class="usage-unavailable">Account limits unavailable</div></div>`;
     const usage = S.agent_usage[kind];
+    const cursorKnown = kind === "cursor" && (Number.isFinite(usage?.primary?.used_pct) || Number.isFinite(usage?.secondary?.used_pct));
+    if (kind === "cursor" && !cursorKnown) return `<div class="usage-meter" data-provider="cursor"><b>Cursor</b>
+      <div class="usage-unavailable">Account limits unavailable</div></div>`;
     const stale = !usage || now - usage.updated_at >= S.cfg.agents_stale_hours * 3600;
     const bars = ["primary", "secondary"].map((key, i) => {
       const win = usage?.[key];
       const expired = win?.resets_at != null && win.resets_at <= now;
       const pct = !stale && !expired && win && Number.isFinite(win.used_pct) ? Math.round(win.used_pct) : null;
-      const label = win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h";
+      const label = win?.label || (win ? usageDuration(win.window_minutes) : i ? "Weekly" : "5h");
       const detail = pct == null ? "—" : pct + "%";
       return `<div class="usage-label"><span>${label}</span><b>${detail}</b></div>
         <div class="usage-track ${pct == null ? "unknown" : ""}" ${pct == null ? "" :
@@ -163,7 +166,9 @@ function renderAgents(sec) {
     }
     html += kinds.map((kind) => {
       const items = list.filter((a) => (a.agent || "claude") === kind)
-        .sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
+        .sort((a, b) => (a.parent_id || a.id).localeCompare(b.parent_id || b.id)
+          || (a.parent_id ? 1 : 0) - (b.parent_id ? 1 : 0)
+          || ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
       if (!items.length) return "";
       const label = PROVIDERS[kind] || kind;
       return `<div class="agent-group" data-provider="${esc(kind)}"><h3>${esc(label)}</h3><div class="grid">${items.map((a) => tileHtml(a, items)).join("")}</div></div>`;
