@@ -293,7 +293,13 @@ def native_self_test(
         except BaseException as error:
             errors.append(error)
         finally:
-            window.destroy()
+            if sys.platform == "darwin":
+                from PyObjCTools import AppHelper
+
+                # Programmatic destroy bypasses Cocoa's user-closing event.
+                AppHelper.callAfter(window.native.performClose_, None)
+            else:
+                window.destroy()
 
     with tempfile.TemporaryDirectory(prefix="pideck-native-check-", ignore_cleanup_errors=True) as temporary:
         config = Path(temporary) / "config.yaml"

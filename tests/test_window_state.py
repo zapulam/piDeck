@@ -37,22 +37,28 @@ def test_invalid_placement_uses_landscape_defaults(
     assert WindowState(path, []).options() == {"width": 960, "height": 640, "maximized": False, "fullscreen": False}
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
 def test_monitor_changes_keep_placement_visible(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    platform: str,
     ) -> None:
     """
     Preserve a secondary-monitor position and recover it after that monitor is removed.
 
     Args:
+        monkeypatch (pytest.MonkeyPatch): Helper restoring the simulated coordinate system.
         tmp_path (Path): Temporary profile directory.
+        platform (str): Windows top-left or Cocoa bottom-left screen coordinate convention.
 
     Returns:
         None: Saved geometry remains visible and fits the selected monitor.
     """
+    monkeypatch.setattr(window_state.sys, "platform", platform)
     path = tmp_path / "window-state.json"
     path.write_text(json.dumps({"width": 1200, "height": 800, "x": -1500, "y": 100}))
     primary = SimpleNamespace(x=0, y=0, width=1280, height=720)
-    secondary = SimpleNamespace(x=-1920, y=0, width=1920, height=1080)
+    secondary = SimpleNamespace(x=-1920, y=-360 if platform == "darwin" else 0, width=1920, height=1080)
     assert WindowState(path, [primary, secondary]).bounds == {"width": 1200, "height": 800, "x": -1500, "y": 100}
     assert WindowState(path, [primary]).bounds == {"width": 1200, "height": 720, "x": 0, "y": 0}
 
