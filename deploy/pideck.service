@@ -4,17 +4,22 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=pi
-WorkingDirectory=/home/pi/piDeck
-ExecStart=/home/pi/piDeck/.venv/bin/python -m pideck
+User=pideck
+Group=pideck
+WorkingDirectory=/opt/pideck
+ExecStart=/opt/pideck/.venv/bin/python -m pideck --config /var/lib/pideck/config.yaml --no-prime
+StateDirectory=pideck
+StateDirectoryMode=0700
+UMask=0077
 Restart=always
 RestartSec=3
 
-# Sandboxing: the server only needs the network and its own folder (it writes .env on first run).
+# Application code is root-owned; only the private state directory is writable.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 ProtectSystem=strict
-ReadWritePaths=/home/pi/piDeck
+ReadWritePaths=/var/lib/pideck
+ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true

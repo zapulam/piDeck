@@ -11,6 +11,7 @@ full-screen takeover; the hub pushes both to every connected browser.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -36,11 +37,13 @@ class Hub:
         """
         self.state: dict[str, Any] = {"spotify": None, "slack": [], "agents": [], "agent_usage": {}}
         self.clients: set[WebSocket] = set()
+        self._connect_lock = asyncio.Lock()
+        self._send_locks: dict[WebSocket, asyncio.Lock] = {}
 
     async def connect(
         self,
         ws: WebSocket,
-        ) -> None:
+        ) -> bool:
         """
         Accept a display websocket and send its initial state snapshot.
 
@@ -48,11 +51,21 @@ class Hub:
             ws (WebSocket): Display websocket to accept, update, or remove.
 
         Returns:
-            None: No value is returned.
+            bool: True for a registered display, or False when the limit or initial send fails.
         """
-        await ws.accept()
-        self.clients.add(ws)
-        await ws.send_text(json.dumps({"type": "snapshot", "state": self.state}))
+        async with self._connect_lock:
+            if len(self.clients) >= 16:
+                await ws.close(code=1013)
+                return False
+            self.clients.add(ws)
+            self._send_locks[ws] = asyncio.Lock()
+        try:
+            async with asyncio.timeout(2):
+                await ws.accept(subprotocol="pideck-v1" if "pideck-v1" in ws.scope.get("subprotocols", []) else None)
+            return await self._send(ws, json.dumps({"type": "snapshot", "state": self.state}))
+        except Exception:
+            self.disconnect(ws)
+            return False
 
     def disconnect(
         self,
@@ -68,6 +81,34 @@ class Hub:
             None: No value is returned.
         """
         self.clients.discard(ws)
+        self._send_locks.pop(ws, None)
+
+    async def _send(
+        self,
+        ws: WebSocket,
+        text: str,
+        ) -> bool:
+        """
+        Serialize one display's sends and disconnect it when backpressure exceeds two seconds.
+
+        Args:
+            ws (WebSocket): Display receiving this event.
+            text (str): Serialized event to send.
+
+        Returns:
+            bool: True after delivery, or False after the slow or closed client is removed.
+        """
+        try:
+            async with asyncio.timeout(2):
+                async with self._send_locks.setdefault(ws, asyncio.Lock()):
+                    await ws.send_text(text)
+            return True
+        except Exception:
+            self.disconnect(ws)
+            with contextlib.suppress(Exception):
+                async with asyncio.timeout(0.1):
+                    await ws.close(code=1013)
+            return False
 
     async def _broadcast(
         self,
@@ -83,14 +124,7 @@ class Hub:
             None: No value is returned.
         """
         text = json.dumps(msg)
-        dead = []
-        for ws in list(self.clients):
-            try:
-                await ws.send_text(text)
-            except Exception:  # client went away mid-send
-                dead.append(ws)
-        for ws in dead:
-            self.clients.discard(ws)
+        await asyncio.gather(*(self._send(ws, text) for ws in list(self.clients)))
 
     async def update(
         self,

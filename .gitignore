@@ -11,4 +11,5 @@ __pycache__/
 /run-desktop
 /run-desktop.cmd
 /piDeck.lnk
+/pideck/assets/pideck.icns
 ui-settings.json

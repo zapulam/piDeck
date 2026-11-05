@@ -57,5 +57,5 @@ def client(
         Iterator[TestClient]: Authenticated client yielded while the test application lifespan is
             active.
     """
-    with TestClient(app, headers=AUTH) as c:
+    with TestClient(app, headers=AUTH, base_url="https://testserver") as c:
         yield c

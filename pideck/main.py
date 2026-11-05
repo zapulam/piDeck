@@ -12,12 +12,9 @@ from starlette.responses import Response
 
 import asyncio
 import contextlib
-import hmac
 import logging
-import os
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -30,6 +27,7 @@ from .hub import Hub
 from .sources.agents import AgentEvent, AgentRegistry
 from .sources.slack import SlackFeed, SlackSource
 from .sources.spotify import Spotify
+from .security import Access, COOKIE, RequestGuard, SESSION_SECONDS, redact_logs
 
 # --- Server configuration ---
 
@@ -41,60 +39,6 @@ LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 # The UI is one static page: no inline scripts, styles only via attributes, art from Spotify's CDN.
 CSP = ("default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; "
        "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-
-
-# --- Connection authorization helpers ---
-
-
-def _host_name(
-    host_header: str,
-    ) -> str:
-    """
-    Normalize a Host header while preserving a bracketed IPv6 address.
-
-    Args:
-        host_header (str): Raw HTTP Host header, optionally including a port.
-
-    Returns:
-        str: Lowercase hostname with the port removed and IPv6 brackets preserved.
-    """
-    h = host_header.strip().lower()
-    return h[: h.index("]") + 1] if h.startswith("[") else h.split(":")[0]
-
-
-def is_loopback(
-    conn: HTTPConnection,
-    ) -> bool:
-    """
-    True for the kiosk browser on this machine. Both the peer address and the Host header
-    must be loopback, so a DNS-rebinding page (Host: evil.example) doesn't qualify.
-
-    Args:
-        conn (HTTPConnection): Incoming HTTP or websocket connection whose origin and access are
-            checked.
-
-    Returns:
-        bool: True only when both the peer address and requested hostname identify this machine.
-    """
-    ip = conn.client.host if conn.client else ""
-    return ip in LOOPBACK_IPS and _host_name(conn.headers.get("host", "")) in LOOPBACK_HOSTS
-
-
-def same_origin(
-    conn: HTTPConnection,
-    ) -> bool:
-    """
-    Browsers always send Origin on cross-site requests and websockets; refuse any that isn't us.
-
-    Args:
-        conn (HTTPConnection): Incoming HTTP or websocket connection whose origin and access are
-            checked.
-
-    Returns:
-        bool: True when Origin is absent or matches the request Host header.
-    """
-    origin = conn.headers.get("origin")
-    return not origin or urlparse(origin).netloc.lower() == conn.headers.get("host", "").lower()
 
 
 # --- Application and request models ---
@@ -111,6 +55,7 @@ def create_app(
     mock: Optional[bool] = None,
     lively: bool = True,
     prime: bool = False,
+    desktop: bool = False,
     ) -> FastAPI:
     """
     Create the application, source lifecycles, authenticated routes, and static UI.
@@ -121,6 +66,7 @@ def create_app(
         mock (Optional[bool]): Whether generated example data replaces live provider connections.
         lively (bool): Whether the demo should continue emitting random changes after startup.
         prime (bool): Whether existing local sessions are discovered when the server starts.
+        desktop (bool): Whether an owned native window exposes authenticated desktop setup actions.
 
     Returns:
         FastAPI: Configured FastAPI application with source state, lifecycle tasks, routes, and UI
@@ -130,6 +76,7 @@ def create_app(
     cfg = load_config(config_path)
     if mock is not None:
         cfg["mock"] = mock
+    desktop = desktop and not cfg["mock"]
     mods = cfg["modules"]
     secs = float(cfg["alerts"]["seconds"])
 
@@ -137,7 +84,8 @@ def create_app(
     agents = AgentRegistry(hub, mods["agents"], secs)
     feed = SlackFeed(hub, mods["slack"], secs)
     spotify = Spotify(hub, mods["spotify"])
-    token = os.environ.get("PIDECK_TOKEN", "")
+    access = Access(demo=bool(cfg["mock"]))
+    redact_logs()
 
     # --- Connection access checks ---
 
@@ -145,8 +93,7 @@ def create_app(
         conn: HTTPConnection,
         ) -> int:
         """
-        0 = allowed, else the HTTP status to refuse with. Allowed means: from this machine's own
-        browser, or carrying the shared token (Authorization: Bearer, or ?token= for browsers).
+        Delegate scoped authentication and HTTPS/origin checks to the application access policy.
 
         Args:
             conn (HTTPConnection): Incoming HTTP or websocket connection whose origin and access are
@@ -156,13 +103,7 @@ def create_app(
             int: Zero for an allowed connection, 401 for missing/invalid authentication, or 403 for
                 a foreign origin.
         """
-        if not same_origin(conn):
-            return 403
-        given = conn.headers.get("authorization", "")
-        given = given[7:] if given.startswith("Bearer ") else conn.query_params.get("token", "")
-        if given:   # a token was presented: it must be right, even from this machine
-            return 0 if token and hmac.compare_digest(given.encode(), token.encode()) else 401
-        return 0 if is_loopback(conn) else 401
+        return access.authorized(conn)
 
     # --- Background source lifecycle ---
 
@@ -181,8 +122,8 @@ def create_app(
                 application shutdown.
         """
         tasks: list[asyncio.Task] = []
-        if cfg["server"]["host"] not in ("127.0.0.1", "localhost") and not token:
-            log.warning("No PIDECK_TOKEN set: only this machine can use piDeck. Set one to accept hooks from other computers.")
+        if not cfg["mock"] and not access.admin:
+            log.warning("No display credential configured: authenticated access is unavailable")
         if cfg["mock"]:
             from .sources import mock as mock_src
 
@@ -194,7 +135,7 @@ def create_app(
                 tasks.append(asyncio.create_task(SlackSource(feed, mods["slack"]).run()))
         if mods["agents"]["enabled"]:
             tasks.append(asyncio.create_task(agents.prune_forever()))
-            if prime:
+            if prime and not cfg["mock"]:
                 from .local_prime import launch_prime
 
                 async def _refresh_prime() -> None:
@@ -205,7 +146,8 @@ def create_app(
                         None: No value is returned.
                     """
                     while True:
-                        await asyncio.to_thread(launch_prime)
+                        await asyncio.to_thread(launch_prime, getattr(app.state, "prime_url",
+                                                f"http://127.0.0.1:{cfg['server']['port']}/"))
                         await asyncio.sleep(900)
 
                 tasks.append(asyncio.create_task(_refresh_prime()))
@@ -215,6 +157,13 @@ def create_app(
 
     app = FastAPI(title="piDeck", lifespan=lifespan)
     app.state.hub, app.state.agents, app.state.feed, app.state.cfg = hub, agents, feed, cfg
+    app.state.access = access
+    app.state.desktop_actions = None
+    if desktop:
+        from .desktop_actions import DesktopActions
+
+        app.state.desktop_actions = DesktopActions(config_file, spotify)
+    app.add_middleware(RequestGuard, access=access)
 
     # --- HTTP security and display configuration ---
 
@@ -238,6 +187,8 @@ def create_app(
         resp = await call_next(request)
         resp.headers.update({"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
                              "Referrer-Policy": "no-referrer", "Content-Security-Policy": CSP})
+        if request.url.path.startswith("/api/"):
+            resp.headers["Cache-Control"] = "no-store"
         return resp
 
     def require_access(
@@ -278,7 +229,98 @@ def create_app(
         """
         return {"views": load_saved_views(config_file, cfg["views"]), "alert_seconds": secs,
                 "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"],
+                "desktop": desktop,
                 "agents_stale_hours": mods["agents"].get("stale_hours", 12)}
+
+    @app.post("/api/session", dependencies=[Depends(require_access)])
+    async def login(
+        request: Request,
+        ) -> Response:
+        """
+        Exchange a display credential for an HttpOnly, expiring browser session.
+
+        Args:
+            request (Request): Authorized display connection selecting the cookie transport.
+
+        Returns:
+            Response: Success response with a private same-site session cookie.
+        """
+        from fastapi.responses import JSONResponse
+
+        previous = request.cookies.get(COOKIE, "")
+        access.bootstrap.pop(request.headers.get("authorization", "").removeprefix("Bearer "), None)
+        access.sessions.pop(previous, None)
+        access.proofs.pop(previous, None)
+        session = access.session()
+        response = JSONResponse({"ok": True, "proof": access.proofs[session]}, headers={"Cache-Control": "no-store"})
+        response.set_cookie(COOKIE, session, max_age=SESSION_SECONDS,
+                            httponly=True, samesite="strict", secure=request.url.scheme == "https")
+        return response
+
+    @app.get("/api/session", dependencies=[Depends(require_access)])
+    async def session_status() -> dict[str, bool]:
+        """
+        Confirm that this browser still has an authorized display session.
+
+        Returns:
+            dict[str, bool]: Success flag without exposing credentials.
+        """
+        return {"ok": True}
+
+    @app.get("/api/desktop", dependencies=[Depends(require_access)])
+    async def desktop_status() -> dict[str, Any]:
+        """
+        Return setup status only for an owned native desktop server.
+
+        Returns:
+            dict[str, Any]: Public setup state, or a not-found error for ordinary servers.
+        """
+        if app.state.desktop_actions is None:
+            raise HTTPException(404)
+        return app.state.desktop_actions.status()
+
+    @app.post("/api/desktop/{action}", dependencies=[Depends(require_access)])
+    async def desktop_action(
+        action: str,
+        ) -> dict[str, Any]:
+        """
+        Run an allowlisted, authenticated native desktop setup action.
+
+        Args:
+            action (str): Fixed setup operation requested by the Settings page.
+
+        Returns:
+            dict[str, Any]: Updated public setup status without credentials.
+        """
+        if app.state.desktop_actions is None:
+            raise HTTPException(404)
+        try:
+            return await asyncio.to_thread(app.state.desktop_actions.perform, action)
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        except Exception:
+            raise HTTPException(503, "Desktop setup failed; check configuration and try again")
+
+    @app.delete("/api/session", dependencies=[Depends(require_access)])
+    async def logout(
+        request: Request,
+        ) -> Response:
+        """
+        Revoke this display's session and clear the browser cookie.
+
+        Args:
+            request (Request): Authorized browser whose opaque session is removed.
+
+        Returns:
+            Response: Success response expiring this browser's cookie.
+        """
+        from fastapi.responses import JSONResponse
+
+        access.sessions.pop(request.cookies.get(COOKIE, ""), None)
+        access.proofs.pop(request.cookies.get(COOKIE, ""), None)
+        response = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+        response.delete_cookie(COOKIE, httponly=True, samesite="strict")
+        return response
 
     @app.post("/api/ui-settings", dependencies=[Depends(require_access)])
     async def update_ui_settings(
@@ -383,14 +425,22 @@ def create_app(
         Returns:
             None: No value is returned.
         """
-        if authorized(ws):
+        if access.limited(ws.client.host if ws.client else "unknown") or authorized(ws):
             return await ws.close(code=1008)      # policy violation: not us, or no token
-        if len(hub.clients) >= MAX_WS_CLIENTS:
-            return await ws.close(code=1013)      # try again later
-        await hub.connect(ws)
+        if not await hub.connect(ws):
+            return
         try:
             while True:
-                await ws.receive_text()  # we only push; this detects disconnects
+                try:
+                    message = await asyncio.wait_for(ws.receive_text(), timeout=30)
+                except TimeoutError:
+                    if authorized(ws):
+                        await ws.close(code=1008)
+                        break
+                    continue
+                if len(message) > 1024:
+                    await ws.close(code=1009)
+                    break
         except WebSocketDisconnect:
             pass
         finally:

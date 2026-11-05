@@ -47,7 +47,7 @@ def test_lifecycle_and_alerts(
     Returns:
         None: Assertions or fixture setup completed successfully.
     """
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("wss://testserver/ws") as ws:
         assert ws.receive_json()["type"] == "snapshot"
 
         post(client, session_id="s1", event="SessionStart", cwd="/home/me/api-gateway")
@@ -87,7 +87,7 @@ def test_fresh_session_settling_is_not_an_alert(
     Returns:
         None: Assertions or fixture setup completed successfully.
     """
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("wss://testserver/ws") as ws:
         ws.receive_json()
         post(client, session_id="x", event="Stop")  # e.g. a session we never saw start
         assert ws.receive_json()["type"] == "state"
@@ -144,7 +144,7 @@ def test_new_client_gets_snapshot(
         None: Assertions or fixture setup completed successfully.
     """
     post(client, session_id="s", event="UserPromptSubmit", cwd="/a/b")
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("wss://testserver/ws") as ws:
         snap = ws.receive_json()
         assert snap["state"]["agents"][0]["name"] == "b"
 
@@ -161,7 +161,7 @@ def test_codex_kind_sticks_and_alerts_carry_it(
     Returns:
         None: Assertions or fixture setup completed successfully.
     """
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("wss://testserver/ws") as ws:
         ws.receive_json()
         post(client, session_id="c1", event="UserPromptSubmit", agent="codex", cwd="/w/site")
         a = ws.receive_json()["value"][0]

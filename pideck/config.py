@@ -14,11 +14,12 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
+from hooks.pideck_hook import protect_file
 
 # --- Configuration defaults and merging ---
 
 DEFAULTS: dict[str, Any] = {
-    "server": {"host": "0.0.0.0", "port": 8765},
+    "server": {"host": "127.0.0.1", "port": 8765, "trusted_proxy_ips": []},
     "views": ["agents", "now_playing", "slack"],
     "mock": False,
     "ui": {"rotate": 0},
@@ -154,6 +155,8 @@ def load_config(
             values.
     """
     p = Path(path) if path else Path("config.yaml")
+    if (p.parent / ".env").is_file():
+        protect_file(p.parent / ".env")
     load_dotenv(p.parent / ".env")
     data: dict = {}
     if p.exists():

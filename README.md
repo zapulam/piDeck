@@ -17,7 +17,7 @@
 
 <p align="center">
   <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: agent groups, compact usage bars, a completion celebration, detailed usage, Spotify, and Slack"><br>
-  <sub>Agents with a thin usage column, a completion celebration, detailed usage, then Spotify and Slack on an 800×480 display. All sessions, usage values, messages and album art are mock examples.</sub>
+  <sub>Agents with a thin usage column, a completion celebration, detailed usage, then Spotify and Slack on an 800Ã—480 display. All sessions, usage values, messages and album art are mock examples.</sub>
 </p>
 
 ## How it works
@@ -50,17 +50,25 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 ## Integrations
 
-- **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Tiny account bars show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
-- **Codex CLI** — the same tiles, context bars, and account usage bars. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
-- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. API and Included allowance bars use the sign-in already on this computer. [Setup](#cursor)
-- **Spotify** — now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
-- **Slack** — DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
+- **Claude Code** â€” one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Tiny account bars show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
+- **Codex CLI** â€” the same tiles, context bars, and account usage bars. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
+- **Cursor** â€” session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. API and Included allowance bars use the sign-in already on this computer. [Setup](#cursor)
+- **Spotify** â€” now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
+- **Slack** â€” DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
 
 Each one can be switched off under `modules:` in `config.yaml`, and the pages you see are listed under `views:`. Spotify, Slack and Codex are covered by automated tests with simulated data; they haven't been run against live accounts yet, so expect to tune a little on first use. Want another source? A new integration is one module in `pideck/sources/` plus one page renderer in `pideck/ui/app.js`.
 
 ## Setup
 
-### Desktop: Windows and macOS
+### Desktop installers
+
+Download the Windows setup executable or the macOS disk image produced by the **Desktop installers** workflow. These bundles include Python and dependencies. Windows setup creates a Start menu shortcut, offers a desktop shortcut and start-at-login option, and installs Microsoft WebView2 if it is missing (that prerequisite needs internet access). On macOS, drag piDeck to Applications; choose the Intel or Apple Silicon image matching your Mac.
+
+The initial packages are **unsigned test builds**. Windows may display an unknown-publisher warning; macOS may require an explicit Open Anyway exception. They are not publisher-verified distributions. Signing and Apple notarization are supported when external certificates are available.
+
+Open Settings with the gear button to connect installed agents, connect Spotify, open configuration, or enable startup. Configuration is separate from application files: `%LOCALAPPDATA%\piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Copy `.env.example` to `.env` there and add account settings. Packaged apps import credentials into Windows Credential Manager or macOS Keychain and remove imported secrets from `.env`. Restart after editing integration settings. Upgrades preserve the configuration folder; Windows uninstall preserves it too. On Mac, disable startup before moving the app to Trash.
+
+### Desktop from source: Windows and macOS
 
 Clone this repository, then run the setup script for your computer (Python 3.11+ required):
 
@@ -78,17 +86,17 @@ bash scripts/setup-macos.sh
 ./run-desktop
 ```
 
-Each script creates `.venv`, installs desktop dependencies, writes a `run-desktop` launcher, and installs Claude Code / Codex / Cursor hooks aimed at `http://localhost:8765` (no token needed for that local server). The launcher always passes the repo `config.yaml`, so the `.env` beside it is the one Spotify, Slack, and the local server use. `python -m pideck.desktop` does the same when you start it from the repo. Pass `-NoHooks` / `--no-hooks` to skip hooks, or `--url` / `--token` when the display is a remote Pi.
+Each script creates `.venv`, installs desktop dependencies, writes a `run-desktop` launcher, and installs Claude Code / Codex / Cursor hooks aimed at `http://localhost:8765` (with a separate event-only credential). The launcher always passes the repo `config.yaml`, so the `.env` beside it is the one Spotify, Slack, and the local server use. `python -m pideck.desktop` does the same when you start it from the repo. Pass `-NoHooks` / `--no-hooks` to skip hooks, or `--url` / `--token` when the display is a remote Pi.
 
 The same script puts piDeck in the Windows Start menu, and on macOS it writes `~/Applications/piDeck.app` so Launchpad and Spotlight can open it. Both still run this clone and its `.venv`. Re-run the script after moving the folder.
 
 To open piDeck when you log in, run the setup script again with `-Startup` on Windows or `--startup` on macOS. Windows adds a Startup-folder shortcut. macOS adds a login LaunchAgent. Remove that shortcut or plist to stop it.
 
-The resizable window starts at 520×720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. Prefer the browser instead? Run `.venv`'s `python -m pideck --mock` and open `http://localhost:8765`.
+The resizable window starts at 520Ã—720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. Prefer the browser instead? Run `.venv`'s `python -m pideck --mock` and open `http://localhost:8765`.
 
 Logs and the persistent browser profile still live under `%LOCALAPPDATA%/piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Use `--port` to choose another local port and point the hooks at that port as well.
 
-To view an existing Pi server instead, use `python -m pideck.desktop --url "http://YOUR-PI:8765/?token=YOUR_PIDECK_TOKEN"`. This starts only a window; the Pi continues to run the server. The token is remembered in the desktop profile. If another local server already occupies the configured port, close it or use `--url http://localhost:8765` to view it.
+To view an existing Pi server instead, use `python -m pideck.desktop --url "https://YOUR-PI-HTTPS-ADDRESS/"`, then enter its display token. Remote plain HTTP and URL query tokens are refused. Credentials become expiring HttpOnly cookies plus an origin-bound session proof; they are not kept in local storage. The owned native window signs in automatically from its private local credentials. A second launch activates the existing owned window.
 
 Windows uses the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (usually already installed with Edge); macOS uses WebKit. If Windows reports that WebView2 is missing, install Microsoft's Evergreen runtime.
 
@@ -98,24 +106,25 @@ The Windows desktop window uses piDeck's raspberry icon in the taskbar. After up
 
 ```bash
 git clone https://github.com/zapulam/piDeck ~/piDeck && cd ~/piDeck
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-sudo cp deploy/pideck.service /etc/systemd/system/ && sudo systemctl enable --now pideck
+sudo sh deploy/install-pi.sh
 ```
 
-Edit `User=` and the paths in the service file if yours differ. Then start `deploy/kiosk.sh` from your desktop session's autostart (on Raspberry Pi OS with labwc: add `/home/pi/piDeck/deploy/kiosk.sh` to `~/.config/labwc/autostart`). The kiosk must open `http://localhost:8765`: the Pi's own browser is trusted without a token only on that address.
+The installer creates a non-login `pideck` system account automatically. Application files and the bundled virtual environment live under `/opt/pideck`, owned by root. Private configuration and writable data live under `/var/lib/pideck`, owned by the service account. The service starts at boot and listens only on `127.0.0.1:8765`. Use `sudo` to edit `/var/lib/pideck/config.yaml` and `.env`; do not make those files publicly readable. Existing installs should copy their configuration and credentials into this directory with owner `pideck` and mode `600` before restarting the service.
 
-On first start the server creates an access token, saves it as `PIDECK_TOKEN` in `.env`, and prints the exact command to run on your computer. Run `python -m pideck` once in a terminal to see it, or find the token in `.env`.
+For another computer to connect, use HTTPS. For example, Tailscale Serve can forward an HTTPS address to `http://127.0.0.1:8765`. Configure `server.trusted_proxy_ips: [127.0.0.1]` only when that trusted local proxy supplies the original client address and HTTPS scheme; preserve the public Host header. Wildcard proxy trust is not accepted. Direct network listeners instead require `--tls-cert` and `--tls-key`. Do not forward the raw HTTP port through a router.
 
-For Spotify and Slack, copy the credentials from `.env.example` into `.env` (see their sections below) and set `mock: false` in `config.yaml`.
+The service creates two credentials in its private `.env`: `PIDECK_TOKEN` signs a display in; `PIDECK_HOOK_TOKEN` only submits agent events. Enter the display token when opening the local kiosk or remote HTTPS page. The kiosk is no longer implicitly trusted simply because it runs on the Pi. `deploy/kiosk.sh` opens the local page from the graphical user's autostart; it never requires access to the service's private files. A continuously open authenticated display renews its private session, but a service restart requires signing in again.
 
-**Portrait, landscape, or rotated.** The layout follows the screen's shape on its own: portrait (720×1280), landscape (1280×720, 800×480), and square all work. The Raspberry Pi Touch Display 2 is natively portrait, so to use it sideways either rotate it in the OS (recommended: Screen Configuration on Raspberry Pi OS, or `wlr-randr --output DSI-1 --transform 90`; touch rotates with it), or set `ui.rotate: 90` (or 180 / 270) in `config.yaml`. Try it live with `http://localhost:8765/?rotate=90`.
+For Spotify and Slack, add credentials to the service's private `.env` and restart it. The headless service does not inspect the graphical user's agent transcripts or provider sign-ins; hooks on the agent's computer send the permitted event data.
+
+**Portrait, landscape, or rotated.** The layout follows the screen's shape on its own: portrait (720Ã—1280), landscape (1280Ã—720, 800Ã—480), and square all work. The Raspberry Pi Touch Display 2 is natively portrait, so to use it sideways either rotate it in the OS (recommended: Screen Configuration on Raspberry Pi OS, or `wlr-randr --output DSI-1 --transform 90`; touch rotates with it), or set `ui.rotate: 90` (or 180 / 270) in `config.yaml`. Try it live with `http://localhost:8765/?rotate=90`.
 
 ### Claude Code and Codex
 
 On each computer that runs Claude Code or Codex you need Python 3 and a copy of this repo (or just its `hooks/` folder). Run once:
 
 ```bash
-python3 hooks/install.py --url http://YOUR-PI:8765 --token YOUR_PIDECK_TOKEN --test
+python3 hooks/install.py --url https://YOUR-PI-HTTPS-ADDRESS --token YOUR_PIDECK_HOOK_TOKEN --test
 ```
 
 It checks the server is reachable, saves the address and token, copies the hook script next to them (so the repo can be deleted afterwards), adds the hooks to Claude Code and/or Codex (whichever it finds), and shows a test tile on the display. For Claude, it also wraps the status-line command to forward usage data, preserving the existing command's input, output, and settings; uninstall restores it. It keeps a backup of anything it edits and can be re-run safely. `--dry-run` shows what it would do; `--uninstall` removes everything. Restart any open sessions afterwards. **If you already installed the hooks, rerun this command to pick up usage reporting.**
@@ -125,7 +134,7 @@ It works the same for the terminal and for desktop or editor apps, because the a
 <details>
 <summary>Prefer to do it by hand?</summary>
 
-Merge `hooks/settings.example.json` into `~/.claude/settings.json` (and `hooks/codex-hooks.example.json` into `~/.codex/hooks.json`), fixing the script path, and put your address in `~/.config/pideck/hook.json` as `{"url": "http://YOUR-PI:8765", "token": "..."}`, or export `PIDECK_URL` and `PIDECK_TOKEN`.
+Merge `hooks/settings.example.json` into `~/.claude/settings.json` (and `hooks/codex-hooks.example.json` into `~/.codex/hooks.json`), fixing the script path, and put your address in `~/.config/pideck/hook.json` as `{"url": "https://YOUR-PI-HTTPS-ADDRESS", "token": "..."}`, or export `PIDECK_URL` and `PIDECK_HOOK_TOKEN`.
 </details>
 
 **What the tiles show.** Each session becomes a tile with its own pixel fruit, picked from the project name (piDeck is always the raspberry). **Working**: a blue outline, bouncing fruit, and a three-dot thought bubble at random intervals. **Needs you**: a blinking "!" and a full-screen alert. **Done**: a brief full-screen celebration with a randomly chosen cowboy hat, graduation cap, baseball cap, or sunglasses, then an asleep fruit with a completion checkmark on its tile. Click the tile (or focus it and press Enter or Space) to mark it as seen; resuming work also clears the checkmark. Acknowledgments survive display reloads. Hooks do not report when you merely focus a session in another app. **Idle**: awake, blinking and glancing around at random intervals. **Error**: dull colours and a sweat drop. Each tile labels its provider and context-used percentage and bar when available.
@@ -160,7 +169,7 @@ Differences from Claude Code: Codex has no session-end event, so a finished tile
 The hook installer auto-detects `~/.cursor`, or you can select it explicitly:
 
 ```bash
-python hooks/install.py --cursor --url http://YOUR-PI:8765 --token YOUR_PIDECK_TOKEN
+python hooks/install.py --cursor --url https://YOUR-PI-HTTPS-ADDRESS --token YOUR_PIDECK_HOOK_TOKEN
 ```
 
 It merges piDeck's flat hook entries into `~/.cursor/hooks.json`, preserves other hooks and settings, and backs up the original file. Reinstalling is safe; `--dry-run` changes nothing and `--uninstall` removes only piDeck entries. Restart Cursor after installation. See [Cursor's hook documentation](https://cursor.com/docs/hooks) for version and environment support.
@@ -176,16 +185,16 @@ A Claude or Cursor subagent gets its own tile, named for its agent type and tagg
 ### Spotify
 
 1. Create an app at <https://developer.spotify.com/dashboard>, add redirect URI `http://127.0.0.1:8888/callback`.
-2. Put `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` in `.env`, run `python -m pideck.spotify_auth`, paste the printed `SPOTIFY_REFRESH_TOKEN` into `.env`.
+2. Put `SPOTIFY_CLIENT_ID` in the private `.env`. Connect Spotify from desktop Settings, or run `python -m pideck.spotify_auth --config /path/to/config.yaml` for source/Pi setup. PKCE validates the setup attempt and saves the refresh token privately; no shipped client secret is needed. Existing secret-based authorizations can retain `SPOTIFY_CLIENT_SECRET`.
 3. Now-playing works on any account; the on-screen play/pause/next/previous buttons need **Premium**.
 
 ### Slack
 
 Create an app at <https://api.slack.com/apps> and:
-- turn on **Socket Mode**, create an app-level token with `connections:write` → `SLACK_APP_TOKEN` (`xapp-…`)
+- turn on **Socket Mode**, create an app-level token with `connections:write` â†’ `SLACK_APP_TOKEN` (`xapp-â€¦`)
 - bot scopes: `users:read`, `im:history`, `app_mentions:read`, `channels:read` (+ `channels:history` for watched channels)
 - event subscriptions (bot): `message.im`, `app_mention` (+ `message.channels`)
-- install to your workspace → `SLACK_BOT_TOKEN` (`xoxb-…`)
+- install to your workspace â†’ `SLACK_BOT_TOKEN` (`xoxb-â€¦`)
 
 You get DMs to the bot and @mentions of it in channels it's invited to. To watch extra channels, list their IDs under `modules.slack.channels`. Your own DMs with other people are not visible to a bot app. (Your workspace may require admin approval to install the app.)
 
@@ -211,7 +220,7 @@ All workflow actions are pinned to reviewed commit SHAs. PR workflows have read-
 
 The version in `pideck/__init__.py` is the source of truth. After merging a tested version change, create a matching tag such as `v0.1.0` on `main` and push it. The **Release** workflow validates the tag/version and main-branch ancestry, reruns CI against that exact commit, and creates a draft GitHub Release only after every check succeeds. Pre-release tags such as `v0.2.0-rc.1` must match the version string and are marked as pre-releases.
 
-Each release includes a source ZIP (for cloning alternatives, Pi installs, and archival) and `SHA256SUMS`. GitHub build-provenance attestations are generated where the repository supports them; GitHub does not support stored attestations for user-owned private repositories, so those releases disclose their absence in the notes and workflow summary. Desktop Windows/macOS installs use the setup scripts in this repository rather than platform binaries. You can check downloads with `sha256sum --check SHA256SUMS` and, when an attestation is available, verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`.
+Each release includes a source ZIP (for cloning alternatives, Pi installs, and archival) and `SHA256SUMS`. GitHub build-provenance attestations are generated where the repository supports them; GitHub does not support stored attestations for user-owned private repositories, so those releases disclose their absence in the notes and workflow summary. Desktop installers are built natively after security checks and include dependency audit results, build provenance, and checksums. Unsigned files are explicitly labeled; checksums do not establish publisher identity. You can check downloads with `sha256sum --check SHA256SUMS` and, when an attestation is available, verify provenance with `gh attestation verify <archive.zip> --repo zapulam/piDeck`.
 
 Tag pushes keep releases as drafts for review. Publish a completed draft in GitHub's Releases UI, or manually run **Release** with the existing tag and **Keep the release as a draft** disabled. Publication creates a draft first, uploads assets, and then publishes only when requested; an interrupted draft can be retried. A draft build still runs the full CI pipeline. Release notes come from `docs/releases/<tag>.md` when present.
 
@@ -221,12 +230,12 @@ When accepting dependency or AI-assisted updates on Zachary's behalf, keep `Zach
 
 ## Security
 
-piDeck shows private things (Slack messages, what you are listening to, project names), so it is closed by default:
+The server binds to loopback by default. Every real display, including the local kiosk, authenticates. Hook credentials are event-only and cannot read Slack, open browser sessions, or control playback. Remote connections require HTTPS; authenticated HTTP requests never follow redirects. Browser sessions use HttpOnly same-site cookies and a session proof confined to the page origin, with renewal, expiration, and explicit disconnect.
 
-- **Only the Pi itself is trusted without a token.** The kiosk browser on `http://localhost:8765` just works. Everything else (the websocket, agent events, Spotify and Slack controls) needs the access token, which is created on first start and kept in `.env` (owner-only). Another device's browser can open `http://YOUR-PI:8765/?token=...` once; the token is remembered in that browser and removed from the address bar.
-- **Cross-site and rebinding protection.** Requests and websockets from another web origin are refused, and "this machine" must be reached as `localhost`, so a web page you visit can't read your display or press its buttons.
-- **Limits.** Event fields have length caps, and at most 100 sessions and 16 screens are kept.
-- **Your replies stay on your computer by default.** The hook sends project names, states and short system notifications, not what the assistant said. To also show a 200-character snippet of the last reply on "done" alerts, set `PIDECK_SEND_MESSAGES=1` or `"send_messages": true` in `~/.config/pideck/hook.json`.
-- **Sandboxed service.** `deploy/pideck.service` drops privileges and restricts the filesystem and network families. CI and a scheduled weekly audit run `pip-audit`; dependency updates are maintained manually.
+Message text, including Claude notifications, stays private unless `PIDECK_SEND_MESSAGES=1` or `"send_messages": true` is enabled. Only project folder names are sent by default; full paths require `PIDECK_SEND_PATHS=1`. Provider access credentials stay on the agent computer and only reduced usage fields reach the display.
 
-What it does not do: encrypt traffic. The hook talks plain HTTP, so on a network you don't trust, put the Pi and your computer on a private tunnel such as [Tailscale](https://tailscale.com) or WireGuard (or put an HTTPS reverse proxy in front), and use the tunnel address as `--url`. For local-only use, set `server.host: 127.0.0.1`. See [SECURITY.md](SECURITY.md) to report a problem.
+Requests have raw-body, rate, session, and client limits. Slow displays time out independently. Logs redact legacy query credentials and native bootstrap fragments. Packaged secrets use the OS vault; source/Pi secrets and hook settings use private files with Unix owner permissions or Windows ACLs.
+
+**Upgrade migration:** the first secured startup rotates the old display credential because previous versions also gave it to hooks and could log it. Reconnect displays and reinstall hooks with the new `PIDECK_HOOK_TOKEN`, or use desktop Settings → Connect installed agents. Existing query-token links and non-local HTTP hook URLs must be replaced.
+
+The Pi service runs as a dedicated account with read-only application files and private writable state. Desktop builds use hash-locked dependencies and are tested on native Windows, Intel Mac, and Apple Silicon runners. See [SECURITY.md](SECURITY.md) for the threat model and reporting process.

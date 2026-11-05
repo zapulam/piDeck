@@ -37,7 +37,7 @@ def test_usage_update_preserves_session_state_and_snapshot(
     """
     client.post("/api/agents/event", json={"session_id": "s", "state": "waiting", "agent": "claude"})
     before = dict(client.app.state.agents.agents["s"])
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("wss://testserver/ws") as ws:
         ws.receive_json()
         response = client.post("/api/agents/event", json={
             "session_id": "s", "event": "UsageUpdate", "agent": "claude", "context_pct": 42,
@@ -51,7 +51,7 @@ def test_usage_update_preserves_session_state_and_snapshot(
         client.post("/api/agents/event", json={"session_id": "late", "event": "UsageUpdate", "agent": "codex",
                                               "usage": {"secondary": {"used_pct": 89, "window_minutes": 10080}}})
         assert ws.receive_json()["key"] == "agent_usage"
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("wss://testserver/ws") as ws:
         state = ws.receive_json()["state"]
         assert len(state["agents"]) == 1
         assert state["agent_usage"]["claude"]["primary"]["used_pct"] == 0

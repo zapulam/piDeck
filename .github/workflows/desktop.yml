@@ -1,0 +1,140 @@
+name: Desktop installers
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    name: Security verification before packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.13'
+          check-latest: true
+      - run: python -m pip install -r requirements-dev.txt pip-audit==2.10.1
+      - run: python -m pytest -q -m 'not browser'
+      - run: python scripts/check_python_style.py
+      - run: python -m pip_audit -r requirements-lock.txt --require-hashes --no-deps --disable-pip
+
+  pi-service:
+    name: Pi service installation and permissions (Linux)
+    needs: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Install the isolated service
+        run: sudo sh deploy/install-pi.sh
+      - name: Verify account isolation, API access, and private storage
+        shell: bash
+        run: |
+          for _ in $(seq 1 30); do
+            curl -fs http://127.0.0.1:8765/api/health >/dev/null && break
+            sleep 1
+          done
+          systemctl is-active --quiet pideck
+          test "$(stat -c '%U:%a' /var/lib/pideck)" = 'pideck:700'
+          sudo test "$(sudo stat -c '%U:%a' /var/lib/pideck/.env)" = 'pideck:600'
+          sudo -u pideck test ! -w /opt/pideck/pideck/main.py
+          sudo -u nobody test ! -r /var/lib/pideck/.env
+          sudo /opt/pideck/.venv/bin/python - <<'PY'
+          from dotenv import dotenv_values
+          import httpx
+          import subprocess
+          tokens = dotenv_values('/var/lib/pideck/.env')
+          with httpx.Client(base_url='http://127.0.0.1:8765', trust_env=False) as client:
+              assert client.post('/api/slack/clear').status_code == 401
+              headers = {'Authorization': 'Bearer ' + tokens['PIDECK_HOOK_TOKEN']}
+              assert client.post('/api/agents/event', json={'session_id':'ci', 'event':'SomethingIgnored'}, headers=headers).status_code == 200
+              assert client.post('/api/session', headers=headers).status_code == 403
+              assert client.post('/api/session', headers={'Authorization':'Bearer ' + tokens['PIDECK_TOKEN']}).status_code == 200
+          logs = subprocess.check_output(['journalctl','-u','pideck','--no-pager'], text=True)
+          if any(tokens[name] in logs for name in ('PIDECK_TOKEN','PIDECK_HOOK_TOKEN')):
+              raise RuntimeError('A credential appeared in service logs')
+          print('Service account, private storage, scoped authentication, and log checks passed')
+          PY
+      - name: Stop the disposable service
+        if: always()
+        run: sudo systemctl disable --now pideck || true
+
+  package:
+    name: Package (${{ matrix.name }})
+    needs: [security, pi-service]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: macos-15-intel
+            name: macos-x86_64
+          - os: macos-15
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.13'
+          check-latest: true
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+      - name: Install hash-locked build dependencies
+        run: python -m pip install --require-hashes -r requirements-lock.txt
+      - name: Build and smoke-test the native installer
+        run: python scripts/build_desktop.py
+      - name: Verify Windows installer lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/installers/*-setup.exe).FullName
+          ./scripts/check_windows_installer.ps1 -Installer $installer
+      - name: Verify Mac disk image and application signature structure
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          hdiutil verify dist/installers/*.dmg
+          codesign --verify --deep --strict dist/piDeck.app
+          test -x dist/piDeck.app/Contents/MacOS/piDeck
+          test -x dist/piDeck.app/Contents/MacOS/piDeck-hook
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: piDeck-${{ matrix.name }}-unsigned
+          path: dist/installers/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure()
+        with:
+          name: desktop-debug-${{ matrix.name }}
+          path: |
+            build/*test.json
+            build/piDeck/warn-*.txt
+          if-no-files-found: ignore
+          retention-days: 7

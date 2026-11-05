@@ -2,7 +2,7 @@
 
 One-command setup for piDeck hooks (Claude Code, Codex, and Cursor). Stdlib only.
 
-    python3 hooks/install.py --url http://pideck.local:8765 --token YOUR_TOKEN
+    python3 hooks/install.py --url https://YOUR_PI_HTTPS_ADDRESS --token YOUR_PIDECK_HOOK_TOKEN
 
 What it does, and nothing else:
   1. saves the server address/token to ~/.config/pideck/hook.json (readable only by you)
@@ -30,6 +30,11 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+try:
+    from .pideck_hook import private_write, safe_open, validate_transport_url
+except ImportError:
+    from pideck_hook import private_write, safe_open, validate_transport_url
 
 # --- Hook event configuration ---
 
@@ -117,7 +122,10 @@ def command_for(
     Returns:
         str: Quoted Python command with an explicit provider flag for non-Claude hooks.
     """
-    cmd = f'"{sys.executable}" "{script}"'
+    executable = Path(sys.executable)
+    if getattr(sys, "frozen", False):
+        executable = executable.with_name("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
+    cmd = f'"{executable}" "{script}"'
     return cmd + (f" --source {source}" if source != "claude" else "")
 
 
@@ -171,7 +179,7 @@ def write_json(
         backup = path.with_name(path.name + ".pideck-backup")
         if not backup.exists():  # keep the very first, pre-piDeck copy
             shutil.copy2(path, backup)
-    path.write_text(new)
+    private_write(path, new)
     return True
 
 
@@ -273,7 +281,7 @@ def install_statusline(
         cfg = conf_dir(home) / "hook.json"
         saved = read_json(cfg)
         saved["claude_status_line"] = original
-        cfg.write_text(json.dumps(saved, indent=2) + "\n")
+        private_write(cfg, json.dumps(saved, indent=2) + "\n")
     data["statusLine"] = {
         **(original or {}),
         "type": "command",
@@ -366,11 +374,7 @@ def save_settings(
         conf["url"] = url
         if token or "token" not in conf:
             conf["token"] = token
-        f.write_text(json.dumps(conf, indent=2) + "\n")
-        try:
-            os.chmod(f, stat.S_IRUSR | stat.S_IWUSR)  # the token lives here: owner only
-        except OSError:
-            pass
+        private_write(f, json.dumps(conf, indent=2) + "\n")
     return f
 
 
@@ -417,7 +421,8 @@ def _request(
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, json.dumps(body).encode() if body is not None else None, headers, method=method)
-    return urllib.request.urlopen(req, timeout=4).read()
+    with safe_open(req, timeout=4) as response:
+        return response.read(65536)
 
 
 def check_server(
@@ -477,7 +482,7 @@ def run_test(
     print("  ...and a full-screen alert. Cleaning up in a few seconds.")
     time.sleep(6)
     try:
-        _request(f"{base}/api/agents/{sid}", method="DELETE")
+        _request(base + "/api/agents/event", token, "POST", {"session_id": sid, "event": "SessionEnd"})
     except Exception:
         pass
 
@@ -500,7 +505,8 @@ def main(
     home = home or Path.home()
     ap = argparse.ArgumentParser(description="Install piDeck hooks for Claude Code, Codex, and Cursor.")
     ap.add_argument("--url", help="piDeck address, e.g. http://pideck.local:8765")
-    ap.add_argument("--token", default="", help="the server's PIDECK_TOKEN, if it has one")
+    ap.add_argument("--token", default=os.environ.get("PIDECK_HOOK_TOKEN", ""), help="the server's event-only PIDECK_HOOK_TOKEN")
+    ap.add_argument("--local-config", type=Path, help="initialize event credentials for an owned loopback server")
     ap.add_argument("--claude", action="store_true", help="install for Claude Code")
     ap.add_argument("--codex", action="store_true", help="install for Codex CLI")
     ap.add_argument("--cursor", action="store_true", help="install for Cursor")
@@ -534,6 +540,17 @@ def main(
 
         if not a.url:
             ap.error("--url is required (e.g. --url http://pideck.local:8765)")
+        validate_transport_url(a.url)
+        if a.local_config is not None:
+            from urllib.parse import urlsplit
+            from pideck.config import load_config
+            from pideck.__main__ import ensure_token
+
+            if urlsplit(a.url).hostname not in {"localhost", "127.0.0.1", "::1"}:
+                raise InstallError("Local configuration credentials may only be sent to loopback")
+            load_config(a.local_config)
+            ensure_token(str(a.local_config))
+            a.token, _ = ensure_token(str(a.local_config), "PIDECK_HOOK_TOKEN")
         if not (want_claude or want_codex or want_cursor):
             raise InstallError(
                 "Couldn't find Claude Code (~/.claude), Codex (~/.codex), or Cursor (~/.cursor) on this machine. "
@@ -567,7 +584,7 @@ def main(
             run_test(a.url, a.token)
         print("Done. Restart any open Claude Code / Codex / Cursor sessions so they pick up the hooks.")
         return 0
-    except InstallError as e:
+    except (InstallError, ValueError) as e:
         print(f"\n{e}", file=sys.stderr)
         return 1
 

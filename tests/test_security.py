@@ -1,339 +1,497 @@
 """
 
-Who is allowed to read from or control the display.
+Adversarial authentication, transport, privacy, resource, and OAuth regression checks.
 
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Any
+import urllib.error
+import urllib.request
 from pathlib import Path
-import httpx
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from hooks import pideck_hook as hook
 from pideck.main import create_app
-from pideck.sources.agents import MAX_SESSIONS
-
-# --- Tests ---
-
-BODY = {"session_id": "s", "event": "SessionStart"}
+from pideck.security import Access, COOKIE, MAX_BODY, SecretFilter
+from pideck.spotify_auth import authorization, callback_code, exchange_code
 
 
-def make(
+# --- Isolated protected application ---
+
+
+@pytest.fixture
+def protected(
     monkeypatch: pytest.MonkeyPatch,
-    token: str = 'sekret',
-    **kw: Any,
+    tmp_path: Path,
     ) -> TestClient:
     """
-    Create a security test client without relying on a platform-specific working directory.
+    Create an HTTPS application with separate synthetic administrator and hook credentials.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper for temporary authentication environment
-            changes.
-        token (str): Shared test token, or an empty string to test an unconfigured server.
-        **kw (Any): Additional arguments for FastAPI's TestClient.
+        monkeypatch (pytest.MonkeyPatch): Helper isolating environment credentials.
+        tmp_path (Path): Private temporary configuration directory.
 
     Returns:
-        TestClient: HTTP client configured with the requested test origin and authentication
-            settings.
+        TestClient: Client without authentication or live source lifecycles.
     """
-    if token:
-        monkeypatch.setenv("PIDECK_TOKEN", token)
-    else:
-        monkeypatch.delenv("PIDECK_TOKEN", raising=False)
-    return TestClient(create_app("/nonexistent/config.yaml"), **kw)
+    monkeypatch.setenv("PIDECK_TOKEN", "display-test-secret")
+    monkeypatch.setenv("PIDECK_HOOK_TOKEN", "event-test-secret")
+    return TestClient(create_app(str(tmp_path / "config.yaml")), base_url="https://testserver")
 
 
-def kiosk(
-    monkeypatch: pytest.MonkeyPatch,
-    token: str = 'sekret',
-    ) -> TestClient:
-    """
-    A request from the Pi's own browser: loopback peer, Host: localhost, no token.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
-        token (str): Access token used only for the intended local or provider request.
-
-    Returns:
-        TestClient: Client using a loopback peer and localhost Host header to simulate the Pi
-            browser.
-    """
-    return make(monkeypatch, token, base_url="http://localhost:8765", client=("127.0.0.1", 50000))
+# --- Scoped authentication and browser sessions ---
 
 
-# TestClient gives websockets "Host: testserver", so say what a real browser would send.
-KIOSK_WS = {"Host": "localhost:8765"}
-
-ENDPOINTS = [("post", "/api/agents/event", BODY), ("delete", "/api/agents/s", None),
-             ("post", "/api/spotify/pause", None), ("post", "/api/slack/clear", None)]
-
-
-def call(
-    c: TestClient,
-    method: str,
+@pytest.mark.parametrize("path", ["/api/slack/clear", "/api/agents/event", "/api/ui-settings"])
+def test_authorization_precedes_json_parsing(
+    protected: TestClient,
     path: str,
-    body: dict[str, Any] | None,
-    **kw: Any,
-    ) -> httpx.Response:
-    """
-    Send a parameterized test request with optional JSON content and request options.
-
-    Args:
-        c (TestClient): Socket client or HTTP test client used by the operation.
-        method (str): HTTP method to use for the request.
-        path (str): Filesystem path or API path used by this operation.
-        body (dict[str, Any] | None): Validated request body or optional JSON fields to send.
-        **kw (Any): Additional arguments accepted by this callback or forwarded to the wrapped
-            operation.
-
-    Returns:
-        httpx.Response: HTTP response from the parameterized security-test request.
-    """
-    return getattr(c, method)(path, **({"json": body} if body else {}), **kw)
-
-
-@pytest.mark.parametrize("method,path,body", ENDPOINTS)
-def test_remote_needs_the_token(
-    monkeypatch: pytest.MonkeyPatch,
-    method: str,
-    path: str,
-    body: dict[str, Any] | None,
     ) -> None:
     """
-    Verify remote needs the token.
+    Refuse an unauthenticated request before parsing its malformed JSON body.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
-        method (str): HTTP method to use for the request.
-        path (str): Filesystem path or API path used by this operation.
-        body (dict[str, Any] | None): Validated request body or optional JSON fields to send.
+        protected (TestClient): Isolated protected API client.
+        path (str): Mutating operation to exercise.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: Malformed JSON cannot bypass the authentication gate.
     """
-    with make(monkeypatch) as c:
-        assert call(c, method, path, body).status_code == 401
-        assert call(c, method, path, body, headers={"Authorization": "Bearer nope"}).status_code == 401
-        assert call(c, method, path, body, headers={"Authorization": "Bearer sekret"}).status_code in (200, 409)
+    assert protected.post(path, content="{", headers={"Content-Type": "application/json"}).status_code == 401
 
 
-def test_websocket_needs_the_token_from_other_machines(
-    monkeypatch: pytest.MonkeyPatch,
+def test_hook_credential_cannot_read_or_control_display(
+    protected: TestClient,
     ) -> None:
     """
-    Verify websocket needs the token from other machines.
+    Permit hook events without granting Slack access, browser sessions, or controls.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): Isolated protected API client.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: Only event submission is granted to the hook credential.
     """
-    with make(monkeypatch) as c:
-        with pytest.raises(WebSocketDisconnect):
-            with c.websocket_connect("/ws"):
-                pass
-        with pytest.raises(WebSocketDisconnect):
-            with c.websocket_connect("/ws?token=nope"):
-                pass
-        with c.websocket_connect("/ws?token=sekret") as ws:      # how a phone or laptop browser connects
-            assert ws.receive_json()["type"] == "snapshot"
+    headers = {"Authorization": "Bearer event-test-secret"}
+    assert protected.post("/api/agents/event", json={"session_id": "s", "event": "SessionStart"}, headers=headers).status_code == 200
+    for path in ("/api/slack/clear", "/api/spotify/pause", "/api/session", "/api/ui-settings"):
+        assert protected.post(path, json={}, headers=headers).status_code == 403
+    with pytest.raises(WebSocketDisconnect):
+        with protected.websocket_connect("wss://testserver/ws", headers=headers):
+            pytest.fail("An event credential must not read the display")
 
 
-def test_kiosk_on_this_machine_needs_no_token(
-    monkeypatch: pytest.MonkeyPatch,
+def test_browser_session_is_private_expiring_and_revocable(
+    protected: TestClient,
     ) -> None:
     """
-    Verify kiosk on this machine needs no token.
+    Exchange an administrator credential for a cookie and revoke it on disconnect.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): Isolated protected API client.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: The cookie works for WebSockets and is invalid after logout or expiration.
     """
-    with kiosk(monkeypatch) as c:
-        assert c.post("/api/agents/event", json=BODY).status_code == 200
-        with c.websocket_connect("/ws", headers=KIOSK_WS) as ws:
-            assert ws.receive_json()["type"] == "snapshot"
-        assert c.post("/api/slack/clear").status_code == 200
+    response = protected.post("/api/session", headers={"Authorization": "Bearer display-test-secret"})
+    assert response.status_code == 200
+    cookie = response.headers["set-cookie"].lower()
+    assert all(value in cookie for value in ("httponly", "secure", "samesite=strict", "max-age=28800"))
+    assert "display-test-secret" not in cookie
+    assert protected.get("/api/session").status_code == 401  # A cookie alone is insufficient.
+    proof = response.json()["proof"]
+    protected.headers["X-piDeck-Session"] = proof
+    with protected.websocket_connect("wss://testserver/ws", subprotocols=["pideck-v1", "pideck-proof." + proof]) as ws:
+        assert ws.receive_json()["type"] == "snapshot"
+    saved = protected.cookies.get(COOKIE)
+    assert protected.delete("/api/session").status_code == 200
+    assert protected.get("/api/session", headers={"Cookie": f"{COOKIE}={saved}"}).status_code == 401
+    protected.app.state.access.sessions[saved] = 0
+    assert protected.get("/api/session", headers={"Cookie": f"{COOKIE}={saved}"}).status_code == 401
 
 
-def test_wrong_token_is_refused_even_from_this_machine(
-    monkeypatch: pytest.MonkeyPatch,
+def test_loopback_is_not_an_authentication_bypass(
+    protected: TestClient,
     ) -> None:
     """
-    Verify wrong token is refused even from this machine.
+    Require credentials from local users and proxies even with a loopback Host header.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): App carrying synthetic credentials.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: Local requests and proxy-shaped requests cannot inherit display access.
     """
-    with kiosk(monkeypatch) as c:
-        assert c.post("/api/agents/event", json=BODY, headers={"Authorization": "Bearer nope"}).status_code == 401
+    local = TestClient(protected.app, base_url="http://localhost:8765", client=("127.0.0.1", 5000))
+    assert local.post("/api/slack/clear").status_code == 401
+    assert local.post("/api/slack/clear", headers={"X-Forwarded-For": "192.0.2.10"}).status_code == 401
+    with pytest.raises(WebSocketDisconnect):
+        with local.websocket_connect("ws://localhost:8765/ws"):
+            pytest.fail("Local users must authenticate")
 
 
-def test_dns_rebinding_host_is_not_treated_as_this_machine(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("origin", ["https://evil.example", "http://testserver", "null"])
+def test_foreign_or_downgraded_origin_is_rejected(
+    protected: TestClient,
+    origin: str,
     ) -> None:
     """
-    Verify dns rebinding host is not treated as this machine.
+    Refuse cross-site and downgraded browser requests even with valid credentials.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): Isolated protected API client.
+        origin (str): Foreign or invalid browser origin.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: The origin check applies to both HTTP and WebSockets.
     """
-    with make(monkeypatch, base_url="http://evil.example:8765", client=("127.0.0.1", 50000)) as c:
-        assert c.post("/api/slack/clear").status_code == 401
-        with pytest.raises(WebSocketDisconnect):
-            with c.websocket_connect("/ws", headers={"Host": "evil.example:8765"}):
-                pass
+    headers = {"Authorization": "Bearer display-test-secret", "Origin": origin}
+    assert protected.post("/api/slack/clear", headers=headers).status_code == 403
+    with pytest.raises(WebSocketDisconnect):
+        with protected.websocket_connect("wss://testserver/ws", headers=headers):
+            pytest.fail("Foreign origins must be rejected")
 
 
-def test_cross_site_requests_are_refused_even_from_this_machine(
-    monkeypatch: pytest.MonkeyPatch,
+def test_plaintext_remote_and_query_credentials_are_rejected(
+    protected: TestClient,
     ) -> None:
     """
-    Verify cross site requests are refused even from this machine.
+    Prevent plaintext remote authentication and legacy token-bearing WebSocket URLs.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): Isolated protected API client.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: Transport and credential-location restrictions are enforced.
     """
-    with kiosk(monkeypatch) as c:
-        evil = {"Origin": "http://evil.example"}
-        assert c.post("/api/slack/clear", headers=evil).status_code == 403
-        assert c.post("/api/spotify/pause", headers=evil).status_code == 403
-        with pytest.raises(WebSocketDisconnect):
-            with c.websocket_connect("/ws", headers={**evil, **KIOSK_WS}):
-                pass
-        ok = {"Origin": "http://localhost:8765"}
-        assert c.post("/api/slack/clear", headers=ok).status_code == 200
-        with c.websocket_connect("/ws", headers={**ok, **KIOSK_WS}) as ws:
-            assert ws.receive_json()["type"] == "snapshot"
+    assert protected.post("http://testserver/api/session", headers={"Authorization": "Bearer display-test-secret"}).status_code == 426
+    assert protected.post("/api/session?token=display-test-secret").status_code == 400
+    with pytest.raises(WebSocketDisconnect):
+        with protected.websocket_connect("wss://testserver/ws?token=display-test-secret"):
+            pytest.fail("URL tokens must not authenticate")
 
 
-def test_no_token_configured_means_only_this_machine(
-    monkeypatch: pytest.MonkeyPatch,
+# --- Resource and logging bounds ---
+
+
+def test_native_bootstrap_is_single_use_and_not_a_general_credential(
+    protected: TestClient,
     ) -> None:
     """
-    Verify no token configured means only this machine.
+    Exchange a native bootstrap once without granting direct API access.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): Isolated protected API client.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: Bootstrap credentials are consumed once and cannot submit events or reopen sessions.
     """
-    with make(monkeypatch, token="") as c:
-        assert c.post("/api/agents/event", json=BODY).status_code == 401
-        assert c.post("/api/agents/event", json=BODY, headers={"Authorization": "Bearer "}).status_code == 401
-    with kiosk(monkeypatch, token="") as c:
-        assert c.post("/api/agents/event", json=BODY).status_code == 200
+    import time
+
+    protected.app.state.access.bootstrap["one-time"] = time.monotonic() + 120
+    headers = {"Authorization": "Bearer one-time"}
+    assert protected.post("/api/agents/event", headers=headers, json={}).status_code == 403
+    assert protected.post("/api/session", headers=headers).status_code == 200
+    assert protected.post("/api/session", headers=headers).status_code == 401
 
 
-def test_security_headers_on_every_response(
-    monkeypatch: pytest.MonkeyPatch,
+def test_large_bodies_and_excessive_attempts_are_refused(
+    protected: TestClient,
     ) -> None:
     """
-    Verify security headers on every response.
+    Enforce raw body bounds and request-attempt limits independently of model fields.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        protected (TestClient): Isolated protected API client.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: Oversized ignored JSON fields and exhausted request budgets are refused.
     """
-    with make(monkeypatch) as c:
-        for path in ("/", "/api/health", "/app.js"):
-            h = c.get(path).headers
-            assert h["x-content-type-options"] == "nosniff" and h["x-frame-options"] == "DENY"
-            assert "frame-ancestors 'none'" in h["content-security-policy"]
+    assert protected.post("/api/agents/event", headers={"Authorization": "Bearer event-test-secret"},
+                          json={"session_id": "s", "event": "Stop", "ignored": "x" * MAX_BODY}).status_code == 413
+    for _ in range(601):
+        protected.app.state.access.limited("testclient")
+    assert protected.get("/api/health").status_code == 429
 
 
-def test_oversized_and_out_of_range_fields_are_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+def test_tokens_are_redacted_from_server_messages() -> None:
+    """
+    Remove credentials from accepted and rejected connection log messages.
+
+    Returns:
+        None: Query and bearer secrets are absent from the formatted event.
+    """
+    record = logging.LogRecord("uvicorn.error", logging.INFO, "", 1, "%s Bearer secret-two",
+                               ("/ws?token=secret-one&rotate=90",), None)
+    assert SecretFilter().filter(record)
+    assert "secret-one" not in record.getMessage() and "secret-two" not in record.getMessage()
+    assert "rotate=90" in record.getMessage()
+    split = logging.LogRecord("httpx", logging.INFO, "", 1, "Authorization: Bearer %s", ("split-secret",), None)
+    SecretFilter().filter(split)
+    assert "split-secret" not in split.getMessage()
+    structured = logging.LogRecord("httpx", logging.INFO, "", 1, "headers: %s",
+                                    ({"Authorization": "Bearer nested-secret"},), None)
+    SecretFilter().filter(structured)
+    assert "nested-secret" not in structured.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_slow_display_does_not_block_fast_display() -> None:
+    """
+    Deliver immediately to a fast display while a slow display times out and is removed.
+
+    Returns:
+        None: A stalled client cannot indefinitely block updates to other displays.
+    """
+    from pideck.hub import Hub
+
+    hub = Hub()
+    delivered = asyncio.Event()
+    slow = Mock()
+    fast = Mock()
+
+    async def stall(
+        text: str,
+        ) -> None:
+        """
+        Simulate a blocked socket transport.
+
+        Args:
+            text (str): Ignored serialized event.
+
+        Returns:
+            None: Cancellation ends the deliberately stalled send.
+        """
+        await asyncio.Event().wait()
+
+    async def accept(
+        text: str,
+        ) -> None:
+        """
+        Record delivery to an unaffected display.
+
+        Args:
+            text (str): Serialized event received by the fast display.
+
+        Returns:
+            None: The delivery event is set.
+        """
+        delivered.set()
+
+    slow.send_text, fast.send_text = stall, accept
+    hub.clients.update((slow, fast))
+    task = asyncio.create_task(hub.update("agents", []))
+    await asyncio.wait_for(delivered.wait(), 0.5)
+    await asyncio.wait_for(task, 3)
+    assert slow not in hub.clients and fast in hub.clients
+
+
+# --- Hook privacy, URLs, and OAuth ---
+
+
+def test_authenticated_hook_does_not_follow_cross_origin_redirect(
+    tmp_path: Path,
     ) -> None:
     """
-    Verify oversized and out of range fields are rejected.
+    Refuse a real HTTP redirect without forwarding the synthetic bearer credential.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        tmp_path (Path): Isolated hook settings directory.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: The redirected endpoint receives no request or credential.
     """
-    with make(monkeypatch) as c:
-        auth = {"Authorization": "Bearer sekret"}
-        for bad in ({"name": "x" * 65}, {"message": "x" * 501}, {"cwd": "x" * 513},
-                    {"context_pct": 150}, {"context_pct": -1}, {"session_id": "x" * 129}):
-            body = {"session_id": "s", "event": "Stop", **bad}
-            assert c.post("/api/agents/event", json=body, headers=auth).status_code == 422, bad
+    received = []
+
+    class Redirect(BaseHTTPRequestHandler):
+        """Redirect to a different hostname while recording unexpected follow-up requests."""
+
+        def do_POST(
+            self,
+            ) -> None:
+            """
+            Return a cross-origin redirect rather than accepting the event.
+
+            Returns:
+                None: The redirect response is sent.
+            """
+            self.send_response(302)
+            self.send_header("Location", f"http://localhost:{self.server.server_port}/unexpected")
+            self.end_headers()
+
+        def do_GET(
+            self,
+            ) -> None:
+            """
+            Record a forbidden redirect follow-up without displaying its credential.
+
+            Returns:
+                None: The unexpected request is recorded.
+            """
+            received.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(
+            self,
+            format: str,
+            *args: Any,
+            ) -> None:
+            """
+            Suppress synthetic server logs.
+
+            Args:
+                format (str): Ignored HTTP log format.
+                *args (Any): Ignored HTTP log arguments.
+
+            Returns:
+                None: No request details are emitted.
+            """
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(urllib.error.HTTPError):
+            hook.post({"session_id": "s", "event": "SessionStart"}, {
+                "PIDECK_URL": f"http://127.0.0.1:{server.server_port}", "PIDECK_HOOK_TOKEN": "synthetic",
+                "PIDECK_CONFIG": str(tmp_path / "hook.json"),
+            })
+        assert received == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
-def test_session_count_is_capped(
-    monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-    """
-    Verify session count is capped.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
-
-    Returns:
-        None: Assertions or fixture setup completed successfully.
-    """
-    with make(monkeypatch) as c:
-        auth = {"Authorization": "Bearer sekret"}
-        for i in range(MAX_SESSIONS + 5):
-            c.post("/api/agents/event", json={"session_id": f"s{i}", "event": "UserPromptSubmit"}, headers=auth)
-        assert len(c.app.state.agents.agents) == MAX_SESSIONS
-
-
-def test_first_run_creates_and_saves_a_token(
+def test_upgrade_rotates_legacy_display_token_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     ) -> None:
     """
-    Verify first run creates and saves a token.
+    Invalidate an old all-purpose credential once while preserving unrelated integration settings.
 
     Args:
-        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
-        monkeypatch (pytest.MonkeyPatch): Pytest helper that restores patched attributes,
-            environment, and paths.
+        tmp_path (Path): Private temporary configuration directory.
+        monkeypatch (pytest.MonkeyPatch): Helper restoring synthetic process credentials.
 
     Returns:
-        None: Assertions or fixture setup completed successfully.
+        None: The migrated credential is fresh and stable across subsequent starts.
     """
-    import os
     from pideck.__main__ import ensure_token
-    monkeypatch.delenv("PIDECK_TOKEN", raising=False)
-    (tmp_path / ".env").write_text("SPOTIFY_CLIENT_ID=abc\nPIDECK_TOKEN=\n")      # as copied from .env.example
-    tok, generated = ensure_token(str(tmp_path / "config.yaml"))
-    assert generated and len(tok) >= 24 and os.environ["PIDECK_TOKEN"] == tok
-    text = (tmp_path / ".env").read_text()
-    assert "SPOTIFY_CLIENT_ID=abc" in text and text.count("PIDECK_TOKEN=") == 1 and f"PIDECK_TOKEN={tok}" in text
+
+    monkeypatch.setenv("PIDECK_TOKEN", "legacy-shared-token")
+    (tmp_path / ".env").write_text("PIDECK_TOKEN=legacy-shared-token\nOTHER=keep\n")
+    value, generated = ensure_token(str(tmp_path / "config.yaml"))
+    assert generated and value != "legacy-shared-token" and len(value) >= 32
+    assert ensure_token(str(tmp_path / "config.yaml")) == (value, False)
+    monkeypatch.setenv("PIDECK_TOKEN", "legacy-shared-token")
+    assert ensure_token(str(tmp_path / "config.yaml")) == (value, False)
+    assert "OTHER=keep" in (tmp_path / ".env").read_text()
+
+
+@pytest.mark.parametrize("url", ["http://pi.local:8765", "http://192.0.2.1", "file:///tmp/x", "https://user:pass@example.com"])
+def test_hook_refuses_unsafe_transport(
+    url: str,
+    ) -> None:
+    """
+    Reject plaintext remote destinations and credentials embedded in URLs.
+
+    Args:
+        url (str): Unsafe integration destination.
+
+    Returns:
+        None: Validation fails before credentials can be sent.
+    """
+    with pytest.raises(ValueError):
+        hook.validate_transport_url(url)
+
+
+def test_notification_privacy_and_admin_token_separation(
+    tmp_path: Path,
+    ) -> None:
+    """
+    Keep notifications private by default and never reuse a display token for hooks.
+
+    Args:
+        tmp_path (Path): Location of absent isolated hook preferences.
+
+    Returns:
+        None: Explicit opt-in is required and the display token is not inherited.
+    """
+    env = {"PIDECK_CONFIG": str(tmp_path / "hook.json"), "PIDECK_SEND_MESSAGES": "0", "PIDECK_TOKEN": "admin"}
+    event = hook.build_event({"session_id": "s", "hook_event_name": "Notification", "message": "private"}, env)
+    assert "message" not in event and hook.load_settings(env)["token"] == ""
+    env["PIDECK_SEND_MESSAGES"] = "1"
+    assert hook.build_event({"session_id": "s", "hook_event_name": "Notification", "message": "private"}, env)["message"] == "private"
+
+
+@pytest.mark.parametrize("callback", ["http://127.0.0.1:8888/wrong?code=x&state=expected", "https://evil.example/?code=x&state=expected", "http://127.0.0.1:8888/callback?code=x&state=wrong", "http://127.0.0.1:8888/callback?code=x&state=expected&state=expected"])
+def test_spotify_rejects_unrelated_callbacks(
+    callback: str,
+    ) -> None:
+    """
+    Refuse wrong callback addresses, stale state, and ambiguous OAuth query parameters.
+
+    Args:
+        callback (str): Unrelated or ambiguous callback URI.
+
+    Returns:
+        None: No invalid callback code is accepted.
+    """
+    with pytest.raises(ValueError):
+        callback_code(callback, "http://127.0.0.1:8888/callback", "expected")
+
+
+def test_spotify_pkce_and_exchange_do_not_require_a_shipped_secret() -> None:
+    """
+    Bind Spotify authorization to PKCE and exchange only the matching verifier.
+
+    Returns:
+        None: Authorization includes state and PKCE, and token exchange disables redirects.
+    """
+    url, state, verifier = authorization("client", "http://127.0.0.1:8888/callback")
+    assert "code_challenge_method=S256" in url and state in url and verifier not in url
+    code = callback_code(f"http://127.0.0.1:8888/callback?code=one-time&state={state}",
+                         "http://127.0.0.1:8888/callback", state)
+    response = Mock(status_code=200)
+    response.json.return_value = {"refresh_token": "private"}
+    with patch("pideck.spotify_auth.httpx.post", return_value=response) as post:
+        assert exchange_code(code, "client", "http://127.0.0.1:8888/callback", verifier) == "private"
+    assert post.call_args.kwargs["follow_redirects"] is False
+    assert post.call_args.kwargs["data"]["code_verifier"] == verifier
+
+
+def test_private_file_replacement_preserves_other_settings(
+    tmp_path: Path,
+    ) -> None:
+    """
+    Persist tokens privately without exposing credentials or discarding unrelated settings.
+
+    Args:
+        tmp_path (Path): Isolated configuration directory.
+
+    Returns:
+        None: Only the selected credential is replaced in the private configuration.
+    """
+    from pideck.credentials import SecretStore
+
+    path = tmp_path / ".env"
+    path.write_text("OTHER=value\nPIDECK_TOKEN=old\n")
+    SecretStore(tmp_path / "config.yaml").set("PIDECK_TOKEN", "new")
+    assert "OTHER=value" in path.read_text() and "old" not in path.read_text()
     if os.name == "posix":
-        assert (tmp_path / ".env").stat().st_mode & 0o077 == 0                    # Unix permission bits
-    assert ensure_token(str(tmp_path / "config.yaml")) == (tok, False)              # not regenerated
+        assert path.stat().st_mode & 0o077 == 0
