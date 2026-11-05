@@ -16,8 +16,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: agent groups, compact usage bars, a completion celebration, detailed usage, Spotify, and Slack"><br>
-  <sub>Agents with a thin usage column, a completion celebration, detailed usage, then Spotify and Slack on an 800Ã—480 display. All sessions, usage values, messages and album art are mock examples.</sub>
+  <img src="docs/demo.gif?v=2d908709081b" width="640" alt="piDeck walkthrough: agent groups, compact usage bars, a completion celebration, detailed usage, Spotify, and Slack"><br>
+  <sub>Agents with a thin usage column, a completion celebration, detailed usage, then Spotify and Slack in a 1024×720 window with all seven agent cards visible and no scrolling. All sessions, usage values, messages and album art are mock examples.</sub>
 </p>
 
 ## How it works
@@ -50,11 +50,11 @@ python -m pideck --mock          # open http://localhost:8765  (use arrow keys o
 
 ## Integrations
 
-- **Claude Code** â€” one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Tiny account bars show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
-- **Codex CLI** â€” the same tiles, context bars, and account usage bars. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
-- **Cursor** â€” session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. API and Included allowance bars use the sign-in already on this computer. [Setup](#cursor)
-- **Spotify** â€” now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
-- **Slack** â€” DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
+- **Claude Code** — one tile per session: working, needs you, done, idle, with a context-used bar and full-screen alerts. Tiny account bars show reported 5-hour and weekly allowance usage. Connects through Claude Code hooks and its status line. [Setup](#claude-code-and-codex)
+- **Codex CLI** — the same tiles, context bars, and account usage bars. Reads usage from local session logs through Codex hooks, or the older `notify` setting (done-only). [Setup](#claude-code-and-codex)
+- **Cursor** — session tiles, working/done/error states, and context snapshots before compaction through Cursor hooks. API and Included allowance bars use the sign-in already on this computer. [Setup](#cursor)
+- **Spotify** — now playing with album art and progress, plus play/pause/next/previous (controls need Premium). Connects through the Spotify Web API. [Setup](#spotify)
+- **Slack** — DMs and @mentions to your bot, plus any channels you pick, with alerts. Connects through Socket Mode, so no public URL is needed. [Setup](#slack)
 
 Each one can be switched off under `modules:` in `config.yaml`, and the pages you see are listed under `views:`. Spotify, Slack and Codex are covered by automated tests with simulated data; they haven't been run against live accounts yet, so expect to tune a little on first use. Want another source? A new integration is one module in `pideck/sources/` plus one page renderer in `pideck/ui/app.js`.
 
@@ -94,7 +94,7 @@ The same script puts piDeck in the Windows Start menu, and on macOS it writes `~
 
 To open piDeck when you log in, run the setup script again with `-Startup` on Windows or `--startup` on macOS. Windows adds a Startup-folder shortcut. macOS adds a login LaunchAgent. Remove that shortcut or plist to stop it.
 
-The resizable window starts at 520Ã—720. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. Prefer the browser instead? Run `.venv`'s `python -m pideck --mock` and open `http://localhost:8765`.
+The resizable window remembers its last size and position; the first launch uses a 960×640 landscape window. `--on-top` keeps it above other windows; `--mock` shows demo data. Closing the window stops its local server. Prefer the browser instead? Run `.venv`'s `python -m pideck --mock` and open `http://localhost:8765`.
 
 Logs and the persistent browser profile still live under `%LOCALAPPDATA%/piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Use `--port` to choose another local port and point the hooks at that port as well.
 
@@ -119,7 +119,7 @@ The service creates two credentials in its private `.env`: `PIDECK_TOKEN` signs 
 
 For Spotify and Slack, add credentials to the service's private `.env` and restart it. The headless service does not inspect the graphical user's agent transcripts or provider sign-ins; hooks on the agent's computer send the permitted event data.
 
-**Portrait, landscape, or rotated.** The layout follows the screen's shape on its own: portrait (720Ã—1280), landscape (1280Ã—720, 800Ã—480), and square all work. The Raspberry Pi Touch Display 2 is natively portrait, so to use it sideways either rotate it in the OS (recommended: Screen Configuration on Raspberry Pi OS, or `wlr-randr --output DSI-1 --transform 90`; touch rotates with it), or set `ui.rotate: 90` (or 180 / 270) in `config.yaml`. Try it live with `http://localhost:8765/?rotate=90`.
+**Portrait, landscape, or rotated.** The layout follows the screen's shape on its own: portrait (720×1280), landscape (1280×720, 800×480), and square all work. The Raspberry Pi Touch Display 2 is natively portrait, so to use it sideways either rotate it in the OS (recommended: Screen Configuration on Raspberry Pi OS, or `wlr-randr --output DSI-1 --transform 90`; touch rotates with it), or set `ui.rotate: 90` (or 180 / 270) in `config.yaml`. Try it live with `http://localhost:8765/?rotate=90`.
 
 ### Claude Code and Codex
 
@@ -193,10 +193,10 @@ A Claude or Cursor subagent gets its own tile, named for its agent type and tagg
 ### Slack
 
 Create an app at <https://api.slack.com/apps> and:
-- turn on **Socket Mode**, create an app-level token with `connections:write` â†’ `SLACK_APP_TOKEN` (`xapp-â€¦`)
+- turn on **Socket Mode**, create an app-level token with `connections:write` → `SLACK_APP_TOKEN` (`xapp-…`)
 - bot scopes: `users:read`, `im:history`, `app_mentions:read`, `channels:read` (+ `channels:history` for watched channels)
 - event subscriptions (bot): `message.im`, `app_mention` (+ `message.channels`)
-- install to your workspace â†’ `SLACK_BOT_TOKEN` (`xoxb-â€¦`)
+- install to your workspace → `SLACK_BOT_TOKEN` (`xoxb-…`)
 
 You get DMs to the bot and @mentions of it in channels it's invited to. To watch extra channels, list their IDs under `modules.slack.channels`. Your own DMs with other people are not visible to a bot app. (Your workspace may require admin approval to install the app.)
 

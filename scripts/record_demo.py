@@ -33,7 +33,7 @@ from pideck.sources.slack import SlackFeed
 from pideck.desktop import local_server
 from pideck.sources import mock
 
-WIDTH, HEIGHT, FPS = 800, 480, 10
+WIDTH, HEIGHT, FPS = 1024, 720, 10
 
 
 # --- Mock source and recording helpers ---
@@ -46,7 +46,7 @@ async def seed_demo(
     lively: bool = True,
     ) -> None:
     """
-    Seed stable demo data without background events interrupting the recording.
+    Seed a compact set of stable mock sessions without background events interrupting the recording.
 
     Args:
         hub (Hub): Temporary server's state and websocket hub.
@@ -58,6 +58,50 @@ async def seed_demo(
         None: No value is returned.
     """
     await mock.seed(hub, agents, feed)
+    visible = {"mock-0", "mock-1", "mock-5", "mock-6", "mock-8", "mock-9"}
+    agents.agents = {key: agent for key, agent in agents.agents.items() if key in visible}
+    agents.agents["mock-8"]["state"] = "working"
+    agents.agents["mock-9"]["state"] = "idle"
+    await agents._publish()
+
+
+def assert_scene_fits(
+    page: Page,
+    ) -> None:
+    """
+    Reject clipped cards and scrollable content before recording a walkthrough scene.
+
+    Args:
+        page (Page): Isolated browser displaying a settled walkthrough page.
+
+    Returns:
+        None: All content fits its visible pane without scrolling.
+
+    Raises:
+        AssertionError: A scene overflows or any agent card is partially hidden.
+    """
+    problems = page.evaluate("""() => {
+        const view = currentView(), section = document.querySelector('#v-' + view);
+        const panes = view === 'agents' ? [...section.querySelectorAll(
+            '.agents-main, .usage-dock, .agents-mini, .usage-details')] : [section];
+        const errors = [];
+        for (const pane of panes) {
+            if (pane.scrollHeight > pane.clientHeight + 1 || pane.scrollWidth > pane.clientWidth + 1 ||
+                pane.scrollTop !== 0) errors.push('Scrollable content: ' + pane.className);
+        }
+        const main = section.querySelector('.agents-main');
+        if (main) {
+            const bounds = main.getBoundingClientRect();
+            for (const tile of main.querySelectorAll('.tile')) {
+                const rect = tile.getBoundingClientRect();
+                if (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1 ||
+                    rect.left < bounds.left - 1 || rect.right > bounds.right + 1)
+                    errors.push('Clipped agent: ' + tile.dataset.id);
+            }
+        }
+        return errors;
+    }""")
+    assert not problems, problems
 
 
 def capture(
@@ -76,6 +120,7 @@ def capture(
     Returns:
         None: No value is returned.
     """
+    assert_scene_fits(page)
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         started = time.monotonic()
@@ -142,6 +187,8 @@ def record(
         AssertionError: A browser error occurs or a demonstrated feature is missing.
     """
     frames, errors = [], []
+    previews = Path(__file__).resolve().parents[1] / "test-results" / "demo"
+    previews.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="pideck-demo-") as folder:
         config = Path(folder) / "config.yaml"
         config.write_text("alerts:\n  seconds: 4\n", encoding="utf-8")
@@ -171,15 +218,11 @@ def record(
                     }""")
                     capture(page, frames, 3)
                     page.evaluate("""() => {
-                        const main = document.querySelector('.agents-main');
-                        main.scrollTo({top: document.querySelector('[data-provider="claude"].agent-group').offsetTop - main.offsetTop,
-                            behavior: 'smooth'});
-                    }""")
-                    capture(page, frames, 3)
-                    page.evaluate("""() => {
                         const m = motions.get('mock-0'); m.thinkAt = 0; animateTiles();
                     }""")
                     capture(page, frames, 1.5)
+                    assert page.locator(".tile").count() == 7
+                    page.screenshot(path=str(previews / "agents.png"))
                     client.post("api/agents/event", json={"session_id": "mock-0", "state": "done"}).raise_for_status()
                     page.locator("#alert.agent-done").wait_for()
                     capture(page, frames, 3)
@@ -187,15 +230,23 @@ def record(
                     tile = page.locator('.tile[data-id="mock-0"]')
                     tile.locator(".completion-badge").wait_for()
                     capture(page, frames, 1.5)
+                    page.screenshot(path=str(previews / "completed.png"))
                     page.locator("[data-agent-view-toggle]").click()
                     page.locator(".usage-details .usage-bar").first.wait_for()
                     capture(page, frames, 3)
+                    page.screenshot(path=str(previews / "usage.png"))
                     page.locator("[data-agent-view-toggle]").click()
                     page.locator('#pager button[data-view="now_playing"]').click()
+                    page.wait_for_function("() => currentView() === 'now_playing'")
+                    page.wait_for_timeout(400)
                     capture(page, frames, 4)
+                    page.screenshot(path=str(previews / "spotify.png"))
                     assert page.evaluate("currentView()") == "now_playing"
                     page.locator('#pager button[data-view="slack"]').click()
+                    page.wait_for_function("() => currentView() === 'slack'")
+                    page.wait_for_timeout(400)
                     capture(page, frames, 4)
+                    page.screenshot(path=str(previews / "slack.png"))
                     assert page.evaluate("currentView()") == "slack"
                 browser.close()
     assert not errors, errors
