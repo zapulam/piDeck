@@ -426,11 +426,17 @@ def main(
         if sys.stderr is not None:
             print(message, file=sys.stderr)
         try:
-            from tkinter import Tk, messagebox
-            root = Tk()
-            root.withdraw()
-            messagebox.showerror("piDeck", message)
-            root.destroy()
+            notice = f"Could not open piDeck. Check your configuration and the desktop log:\n\n{storage / 'desktop.log'}"
+            if sys.platform == "win32":
+                ctypes.windll.user32.MessageBoxW(None, notice, "piDeck", 0x10)
+            elif sys.platform == "darwin":
+                from AppKit import NSAlert, NSApplication
+
+                NSApplication.sharedApplication()
+                alert = NSAlert.alloc().init()
+                alert.setMessageText_("Could not open piDeck")
+                alert.setInformativeText_(notice)
+                alert.runModal()
         except Exception:
             pass
         return 1

@@ -238,6 +238,13 @@ def test_tokens_are_redacted_from_server_messages() -> None:
     assert SecretFilter().filter(record)
     assert "secret-one" not in record.getMessage() and "secret-two" not in record.getMessage()
     assert "rotate=90" in record.getMessage()
+    split = logging.LogRecord("httpx", logging.INFO, "", 1, "Authorization: Bearer %s", ("split-secret",), None)
+    SecretFilter().filter(split)
+    assert "split-secret" not in split.getMessage()
+    structured = logging.LogRecord("httpx", logging.INFO, "", 1, "headers: %s",
+                                    ({"Authorization": "Bearer nested-secret"},), None)
+    SecretFilter().filter(structured)
+    assert "nested-secret" not in structured.getMessage()
 
 
 @pytest.mark.asyncio
@@ -390,6 +397,8 @@ def test_upgrade_rotates_legacy_display_token_once(
     (tmp_path / ".env").write_text("PIDECK_TOKEN=legacy-shared-token\nOTHER=keep\n")
     value, generated = ensure_token(str(tmp_path / "config.yaml"))
     assert generated and value != "legacy-shared-token" and len(value) >= 32
+    assert ensure_token(str(tmp_path / "config.yaml")) == (value, False)
+    monkeypatch.setenv("PIDECK_TOKEN", "legacy-shared-token")
     assert ensure_token(str(tmp_path / "config.yaml")) == (value, False)
     assert "OTHER=keep" in (tmp_path / ".env").read_text()
 

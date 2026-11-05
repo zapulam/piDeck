@@ -80,11 +80,19 @@ def verify_publisher(
         None: Signature and publisher were validated or the build fails.
     """
     env = {**os.environ, "PIDECK_VERIFY_PATH": str(path.resolve()), "PIDECK_VERIFY_PUBLISHER": publisher}
-    subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+    env.pop("PSModulePath", None)
+    shell = shutil.which("pwsh.exe") or "powershell.exe"
+    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
+                    "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop; "
                     "$s=Get-AuthenticodeSignature -LiteralPath $env:PIDECK_VERIFY_PATH; "
                     "Write-Output ('Prerequisite signature: ' + $s.Status + '; ' + $s.StatusMessage + '; ' + $s.SignerCertificate.Subject); "
                     "if($s.Status -ne 'Valid' -or -not $s.SignerCertificate.Subject.Contains($env:PIDECK_VERIFY_PUBLISHER)){exit 1}"],
-                   env=env, check=True, creationflags=0x08000000)
+                            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                            creationflags=0x08000000)
+    if result.stdout.strip():
+        print(result.stdout.strip(), flush=True)
+    if result.returncode:
+        raise RuntimeError("Prerequisite signature verification failed: " + result.stderr.strip())
 
 
 def windows_compiler() -> Path:

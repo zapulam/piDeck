@@ -12,12 +12,9 @@ from starlette.responses import Response
 
 import asyncio
 import contextlib
-import hmac
 import logging
-import os
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -42,60 +39,6 @@ LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 # The UI is one static page: no inline scripts, styles only via attributes, art from Spotify's CDN.
 CSP = ("default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; "
        "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-
-
-# --- Connection authorization helpers ---
-
-
-def _host_name(
-    host_header: str,
-    ) -> str:
-    """
-    Normalize a Host header while preserving a bracketed IPv6 address.
-
-    Args:
-        host_header (str): Raw HTTP Host header, optionally including a port.
-
-    Returns:
-        str: Lowercase hostname with the port removed and IPv6 brackets preserved.
-    """
-    h = host_header.strip().lower()
-    return h[: h.index("]") + 1] if h.startswith("[") and "]" in h else h.split(":")[0]
-
-
-def is_loopback(
-    conn: HTTPConnection,
-    ) -> bool:
-    """
-    True for the kiosk browser on this machine. Both the peer address and the Host header
-    must be loopback, so a DNS-rebinding page (Host: evil.example) doesn't qualify.
-
-    Args:
-        conn (HTTPConnection): Incoming HTTP or websocket connection whose origin and access are
-            checked.
-
-    Returns:
-        bool: True only when both the peer address and requested hostname identify this machine.
-    """
-    ip = conn.client.host if conn.client else ""
-    return ip in LOOPBACK_IPS and _host_name(conn.headers.get("host", "")) in LOOPBACK_HOSTS
-
-
-def same_origin(
-    conn: HTTPConnection,
-    ) -> bool:
-    """
-    Browsers always send Origin on cross-site requests and websockets; refuse any that isn't us.
-
-    Args:
-        conn (HTTPConnection): Incoming HTTP or websocket connection whose origin and access are
-            checked.
-
-    Returns:
-        bool: True when Origin is absent or matches the request Host header.
-    """
-    origin = conn.headers.get("origin")
-    return not origin or urlparse(origin).netloc.lower() == conn.headers.get("host", "").lower()
 
 
 # --- Application and request models ---
@@ -150,8 +93,7 @@ def create_app(
         conn: HTTPConnection,
         ) -> int:
         """
-        0 = allowed, else the HTTP status to refuse with. Allowed means: from this machine's own
-        browser, or carrying the shared token (Authorization: Bearer, or ?token= for browsers).
+        Delegate scoped authentication and HTTPS/origin checks to the application access policy.
 
         Args:
             conn (HTTPConnection): Incoming HTTP or websocket connection whose origin and access are

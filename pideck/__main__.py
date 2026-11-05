@@ -7,6 +7,8 @@ Configure and launch the piDeck HTTP server from the command line.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
 import os
 import secrets
@@ -15,6 +17,7 @@ import sys
 from pathlib import Path
 
 import uvicorn
+from dotenv import dotenv_values
 from hooks.pideck_hook import private_write, protect_file
 
 from .config import load_config
@@ -63,12 +66,24 @@ def ensure_token(
     tok = os.environ.get(name, "")
     marker = env.parent / ".security-v2"
     migrated = marker.is_file()
+    retired = ""
+    if migrated and name == "PIDECK_TOKEN":
+        try:
+            retired = json.loads(marker.read_text(encoding="utf-8")).get("retired", "")
+        except (ValueError, AttributeError):
+            pass
+        if tok and retired and hashlib.sha256(tok.encode()).hexdigest() == retired:
+            saved = store.vault.get_password(store.service, name) if store.vault else dotenv_values(env).get(name, "")
+            tok = saved if saved and hashlib.sha256(saved.encode()).hexdigest() != retired else ""
+            os.environ[name] = tok
     if tok and (name != "PIDECK_TOKEN" or migrated):
         return tok, False
+    if tok and name == "PIDECK_TOKEN":
+        retired = hashlib.sha256(tok.encode()).hexdigest()
     tok = secrets.token_urlsafe(24)
     store.set(name, tok)
     if name == "PIDECK_TOKEN":
-        private_write(marker, "2\n")
+        private_write(marker, json.dumps({"version": 2, "retired": retired}) + "\n")
     return tok, True
 
 
