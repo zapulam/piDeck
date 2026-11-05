@@ -12,13 +12,14 @@ from starlette.responses import Response
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import HTTPConnection
 
@@ -39,6 +40,23 @@ LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 # The UI is one static page: no inline scripts, styles only via attributes, art from Spotify's CDN.
 CSP = ("default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; "
        "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+
+
+# --- UI asset freshness ---
+
+
+def ui_document() -> str:
+    """
+    Fingerprint UI resource URLs by content so same-version upgrades replace cached scripts.
+
+    Returns:
+        str: HTML entry document referencing the current script and stylesheet contents.
+    """
+    document = (UI_DIR / "index.html").read_text(encoding="utf-8")
+    for name in ("style.css", "creature.js", "app.js"):
+        fingerprint = hashlib.sha256((UI_DIR / name).read_bytes()).hexdigest()[:16]
+        document = document.replace(f'"{name}"', f'"{name}?v={fingerprint}"')
+    return document
 
 
 # --- Application and request models ---
@@ -189,6 +207,8 @@ def create_app(
                              "Referrer-Policy": "no-referrer", "Content-Security-Policy": CSP})
         if request.url.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
+        else:
+            resp.headers.setdefault("Cache-Control", "no-cache")
         return resp
 
     def require_access(
@@ -447,14 +467,15 @@ def create_app(
             hub.disconnect(ws)
 
     @app.get("/")
-    async def index() -> FileResponse:
+    @app.get("/index.html", include_in_schema=False)
+    async def index() -> HTMLResponse:
         """
-        Serve the application entry page without caching its HTML.
+        Serve fresh HTML with content-fingerprinted assets, including same-version upgrades.
 
         Returns:
-            FileResponse: The application HTML entry page with browser caching disabled.
+            HTMLResponse: Entry document with cache-safe script/style URLs and caching disabled.
         """
-        return FileResponse(UI_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(ui_document(), headers={"Cache-Control": "no-store"})
 
     app.mount("/", StaticFiles(directory=UI_DIR), name="ui")
     return app
