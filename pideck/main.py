@@ -306,6 +306,7 @@ def create_app(
         from fastapi.responses import JSONResponse
 
         previous = request.cookies.get(COOKIE, "")
+        access.bootstrap.pop(request.headers.get("authorization", "").removeprefix("Bearer "), None)
         access.sessions.pop(previous, None)
         access.proofs.pop(previous, None)
         session = access.session()

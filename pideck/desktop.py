@@ -15,6 +15,7 @@ import ctypes
 import json
 import logging
 import os
+import secrets
 from pathlib import Path
 import socket
 import sys
@@ -145,6 +146,8 @@ def local_server(
     app = create_app(str(config_path), mock=True if mock else None, prime=not mock, desktop=window is not None)
     if window is not None and app.state.desktop_actions is not None:
         app.state.desktop_actions.window = window
+        window["bootstrap"] = secrets.token_urlsafe(32)
+        app.state.access.bootstrap[window["bootstrap"]] = time.monotonic() + 120
     selected_port = int(port if port is not None else cfg["server"]["port"])
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         # Bind before starting the worker so port conflicts are reported in the main thread.
@@ -351,7 +354,7 @@ def run_desktop(
         source = nullcontext(url) if url is not None else local_server(config, mock, port, window=window)
         with source as address:
             if url is None and not mock:
-                address += "#token=" + os.environ["PIDECK_TOKEN"]
+                address += "#token=" + window["bootstrap"]
             window["native"] = webview.create_window("piDeck", address, width=520, height=720,
                                                      min_size=(360, 400), on_top=on_top, background_color="#0b0d12")
             webview.start(private_mode=False, storage_path=str(storage / "webview"), icon=window_icon())

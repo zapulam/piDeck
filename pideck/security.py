@@ -51,6 +51,7 @@ class Access:
             raise ValueError("Display and hook credentials must be different")
         self.demo = demo
         self.activation = ""
+        self.bootstrap: dict[str, float] = {}
         self.sessions: OrderedDict[str, float] = OrderedDict()
         self.proofs: dict[str, str] = {}
         self.attempts: OrderedDict[str, tuple[float, int]] = OrderedDict()
@@ -89,6 +90,8 @@ class Access:
             if not authorization.startswith("Bearer "):
                 return 401
             given = authorization[7:].encode()
+            if self.bootstrap.get(authorization[7:], 0) > time.monotonic():
+                return 0 if conn.url.path == "/api/session" and conn.scope.get("method") == "POST" else 403
             if self.activation and hmac.compare_digest(given, self.activation.encode()):
                 return 0 if conn.url.path == "/api/desktop/activate" and conn.scope.get("method") == "POST" else 403
             if self.admin and hmac.compare_digest(given, self.admin.encode()):

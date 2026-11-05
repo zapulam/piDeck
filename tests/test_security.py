@@ -186,6 +186,27 @@ def test_plaintext_remote_and_query_credentials_are_rejected(
 # --- Resource and logging bounds ---
 
 
+def test_native_bootstrap_is_single_use_and_not_a_general_credential(
+    protected: TestClient,
+    ) -> None:
+    """
+    Exchange a native bootstrap once without granting direct API access.
+
+    Args:
+        protected (TestClient): Isolated protected API client.
+
+    Returns:
+        None: Bootstrap credentials are consumed once and cannot submit events or reopen sessions.
+    """
+    import time
+
+    protected.app.state.access.bootstrap["one-time"] = time.monotonic() + 120
+    headers = {"Authorization": "Bearer one-time"}
+    assert protected.post("/api/agents/event", headers=headers, json={}).status_code == 403
+    assert protected.post("/api/session", headers=headers).status_code == 200
+    assert protected.post("/api/session", headers=headers).status_code == 401
+
+
 def test_large_bodies_and_excessive_attempts_are_refused(
     protected: TestClient,
     ) -> None:

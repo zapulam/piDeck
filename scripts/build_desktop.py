@@ -82,6 +82,7 @@ def verify_publisher(
     env = {**os.environ, "PIDECK_VERIFY_PATH": str(path.resolve()), "PIDECK_VERIFY_PUBLISHER": publisher}
     subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                     "$s=Get-AuthenticodeSignature -LiteralPath $env:PIDECK_VERIFY_PATH; "
+                    "Write-Output ('Prerequisite signature: ' + $s.Status + '; ' + $s.StatusMessage + '; ' + $s.SignerCertificate.Subject); "
                     "if($s.Status -ne 'Valid' -or -not $s.SignerCertificate.Subject.Contains($env:PIDECK_VERIFY_PUBLISHER)){exit 1}"],
                    env=env, check=True, creationflags=0x08000000)
 
@@ -205,6 +206,33 @@ def installer(
 # --- Audit, smoke test, and artifact provenance ---
 
 
+def smoke_test(
+    app: Path,
+    mode: str,
+    report: Path,
+    ) -> None:
+    """
+    Run an isolated bundled self-test and retain actionable diagnostics on failure.
+
+    Args:
+        app (Path): Packaged native executable to test.
+        mode (str): Backend or native-window test flag.
+        report (Path): Non-secret JSON result produced by the isolated test.
+
+    Returns:
+        None: The packaged test passed or a diagnostic build failure is raised.
+    """
+    report.unlink(missing_ok=True)
+    try:
+        result = subprocess.run([str(app), mode, "--report", str(report)], timeout=90)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Bundled self-test timed out; inspect the retained test reports") from None
+    if result.returncode or not report.is_file() or not json.loads(report.read_text())["ok"]:
+        if report.is_file():
+            print(report.read_text(encoding="utf-8"), flush=True)
+        raise RuntimeError("Bundled self-test failed")
+
+
 def main() -> None:
     """
     Audit locked build inputs, create a native bundle, smoke-test it, and package an installer.
@@ -215,6 +243,9 @@ def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     if sys.platform not in {"win32", "darwin"}:
         raise RuntimeError("Build desktop installers natively on Windows or macOS")
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip():
+        raise RuntimeError("Installer builds require a clean committed checkout")
     destination = ROOT / "dist/installers"
     destination.mkdir(parents=True, exist_ok=True)
     run([sys.executable, "-m", "pip_audit", "--local", "--format", "json", "--progress-spinner", "off",
@@ -226,11 +257,8 @@ def main() -> None:
     app = bundle / ("piDeck.exe" if sys.platform == "win32" else "piDeck")
     hook = bundle / ("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
     report = ROOT / "build/bundle-self-test.json"
-    subprocess.run([str(app), "--self-test", "--report", str(report)], check=True, timeout=60)
-    if not json.loads(report.read_text())["ok"]:
-        raise RuntimeError("Bundled application self-test failed")
-    subprocess.run([str(app), "--smoke-window", "--report", str(ROOT / "build/native-window-test.json")],
-                   check=True, timeout=90)
+    smoke_test(app, "--self-test", report)
+    smoke_test(app, "--smoke-window", ROOT / "build/native-window-test.json")
     subprocess.run([str(hook), "--source", "cursor"], input='{"hook_event_name":"sessionEnd"}',
                    text=True, check=True, timeout=10, capture_output=True)
     secrets = [path for path in (ROOT / "dist/piDeck").rglob("*") if path.name in {".env", "hook.json", ".credentials.json"}]
@@ -238,8 +266,10 @@ def main() -> None:
         raise RuntimeError("Private configuration must never be bundled")
     signed = sign_windows([app, hook]) if sys.platform == "win32" else bool(os.environ.get("MACOS_SIGNING_IDENTITY"))
     result = installer(signed, destination)
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip())
+    if current != commit or dirty:
+        raise RuntimeError("Source changed during the build; discard this candidate and rebuild")
     manifest = {"version": __version__, "source_commit": commit, "dirty_source": dirty,
                 "platform": sys.platform, "architecture": platform.machine(), "python": platform.python_version(),
                 "publisher_signed": signed, "installer": result.name,
