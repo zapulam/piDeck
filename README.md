@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="640" alt="piDeck walkthrough: agent groups, compact usage bars, a completion celebration, detailed usage, Spotify, and Slack"><br>
+  <img src="docs/demo.gif?v=2d908709081b" width="640" alt="piDeck walkthrough: agent groups, compact usage bars, a completion celebration, detailed usage, Spotify, and Slack"><br>
   <sub>Agents with a thin usage column, a completion celebration, detailed usage, then Spotify and Slack in a 1024×720 window with all seven agent cards visible and no scrolling. All sessions, usage values, messages and album art are mock examples.</sub>
 </p>
 
