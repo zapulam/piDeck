@@ -34,6 +34,7 @@ from . import __version__
 from .security import redact_logs
 from hooks.pideck_hook import private_write, validate_transport_url
 from .instance import desktop_instance
+from .window_state import WindowState
 
 
 # --- Configuration helpers ---
@@ -280,24 +281,41 @@ def native_self_test(
                     break
             else:
                 raise RuntimeError("Native display authentication failed")
-            report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(json.dumps({"ok": True, "platform": sys.platform,
-                              "checks": ["native-window", "private-session", "websocket-snapshot", "bootstrap-erased"]}), encoding="utf-8")
+            if (window.initial_width, window.initial_height) != (800, 500):
+                raise RuntimeError(f"Saved native window size was not restored: {window.initial_width}x{window.initial_height}")
+            window.resize(880, 540)
+            window.move(40, 50)
+            deadline = time.monotonic() + 10
+            while (window.width, window.height) != (880, 540):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Native window did not resize")
+                time.sleep(0.05)
         except BaseException as error:
             errors.append(error)
         finally:
-            window.destroy()
+            if sys.platform == "darwin":
+                from PyObjCTools import AppHelper
+
+                # Programmatic destroy bypasses Cocoa's user-closing event.
+                AppHelper.callAfter(window.native.performClose_, None)
+            else:
+                window.destroy()
 
     with tempfile.TemporaryDirectory(prefix="pideck-native-check-", ignore_cleanup_errors=True) as temporary:
         config = Path(temporary) / "config.yaml"
         private_write(config, "modules:\n  agents:\n    enabled: false\n  spotify:\n    enabled: false\n  slack:\n    enabled: false\n")
+        placement_file = Path(temporary) / "profile/window-state.json"
+        private_write(placement_file, json.dumps({"width": 800, "height": 500}))
         store = SecretStore(config)
         env = {key: value for key, value in os.environ.items() if key not in NAMES}
         with patch.dict(os.environ, env, clear=True), patch.object(webview, "create_window", create_hidden), \
-                patch("pideck.desktop.data_directory", return_value=Path(temporary) / "profile"), \
+                patch.object(sys.modules[__name__], "data_directory", return_value=Path(temporary) / "profile"), \
                 patch.object(webview, "start", lambda **kwargs: original_start(inspect, **kwargs)):
             try:
                 run_desktop(config_path=config, port=0, native_test=ready.set)
+                saved = json.loads(placement_file.read_text())
+                if not errors and (saved["width"], saved["height"]) != (880, 540):
+                    raise RuntimeError(f"Native window size was not saved on close: {saved['width']}x{saved['height']}")
             finally:
                 if store.vault:
                     for name in ("PIDECK_TOKEN", "PIDECK_HOOK_TOKEN"):
@@ -305,6 +323,10 @@ def native_self_test(
                             store.vault.delete_password(store.service, name)
     if errors:
         raise errors[0]
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"ok": True, "platform": sys.platform,
+                      "checks": ["native-window", "private-session", "websocket-snapshot", "bootstrap-erased",
+                                 "restore-window-size", "save-window-size"]}), encoding="utf-8")
 
 
 def run_desktop(
@@ -355,8 +377,13 @@ def run_desktop(
         with source as address:
             if url is None and not mock:
                 address += "#token=" + window["bootstrap"]
-            window["native"] = webview.create_window("piDeck", address, width=520, height=720,
+            placement = WindowState(storage / "window-state.json", list(webview.screens))
+            options = placement.options()
+            if sys.platform == "darwin":
+                options["maximized"] = False  # Native Cocoa zoom retains the normal restore frame.
+            window["native"] = webview.create_window("piDeck", address, **options,
                                                      min_size=(360, 400), on_top=on_top, background_color="#0b0d12")
+            placement.attach(window["native"])
             webview.start(private_mode=False, storage_path=str(storage / "webview"), icon=window_icon())
 
 

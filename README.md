@@ -66,6 +66,8 @@ Download the Windows setup executable or the macOS disk image produced by the **
 
 The initial packages are **unsigned test builds**. Windows may display an unknown-publisher warning; macOS may require an explicit Open Anyway exception. They are not publisher-verified distributions. Signing and Apple notarization are supported when external certificates are available.
 
+The desktop window remembers its last size, position, and maximized/fullscreen state; its first launch uses a landscape window. Settings is the leftmost page, matching the bottom-left gear.
+
 Open Settings with the gear button to connect installed agents, connect Spotify, open configuration, or enable startup. Configuration is separate from application files: `%LOCALAPPDATA%\piDeck` on Windows and `~/Library/Application Support/piDeck` on macOS. Copy `.env.example` to `.env` there and add account settings. Packaged apps import credentials into Windows Credential Manager or macOS Keychain and remove imported secrets from `.env`. Restart after editing integration settings. Upgrades preserve the configuration folder; Windows uninstall preserves it too. On Mac, disable startup before moving the app to Trash.
 
 ### Desktop from source: Windows and macOS

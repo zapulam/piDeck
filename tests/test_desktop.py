@@ -13,6 +13,7 @@ from pathlib import Path
 import socket
 import sys
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -174,8 +175,9 @@ def test_desktop_remote_window_does_not_start_a_server(
     """
     calls = []
     identity = []
-    fake = SimpleNamespace(create_window=lambda *args, **kwargs: calls.append((args, kwargs)),
-                           start=lambda **kwargs: calls.append(kwargs))
+    native = SimpleNamespace(events=SimpleNamespace(resized=MagicMock(), moved=MagicMock(), closing=MagicMock()))
+    fake = SimpleNamespace(create_window=lambda *args, **kwargs: calls.append((args, kwargs)) or native,
+                           screens=[], start=lambda **kwargs: calls.append(kwargs))
     monkeypatch.setitem(sys.modules, "webview", fake)
     monkeypatch.setattr(desktop, "data_directory", lambda: tmp_path)
     monkeypatch.setattr(desktop, "configure_taskbar", lambda: identity.append(len(calls)))
@@ -204,7 +206,7 @@ def test_desktop_remote_window_does_not_start_a_server(
     assert identity == [0]
     assert calls[0][0] == ("piDeck", url)
     assert calls[0][1]["on_top"] is True
-    assert calls[0][1]["width"] == 520 and calls[0][1]["height"] == 720
+    assert calls[0][1]["width"] == 960 and calls[0][1]["height"] == 640
     assert calls[1]["private_mode"] is False
     assert Path(calls[1]["icon"]).is_file()
     assert calls[1]["icon"].endswith("pideck.ico" if sys.platform == "win32" else "pideck.png")
@@ -297,7 +299,7 @@ def test_desktop_closes_owned_server_when_window_start_fails(
         """
         raise RuntimeError("Renderer unavailable")
 
-    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(create_window=failed_window))
+    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(create_window=failed_window, screens=[]))
     monkeypatch.setattr(desktop, "data_directory", lambda: tmp_path)
     monkeypatch.setattr(desktop, "local_server", server)
     with pytest.raises(RuntimeError, match="Renderer unavailable"):

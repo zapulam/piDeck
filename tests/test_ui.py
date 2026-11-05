@@ -663,6 +663,8 @@ def test_settings_page_is_always_available(
                 page.goto(url)
                 page.locator("#settings-btn").click()
                 page.wait_for_function('() => currentView() === "settings"')
+                assert page.locator("#track > section").first.get_attribute("id") == "v-settings"
+                page.wait_for_function("() => Math.abs(document.querySelector('#track').scrollLeft) < 2")
                 assert page.locator("#settings-panel").count() == 0
                 for name in ("agents", "now_playing", "slack"):
                     page.locator(f'#v-settings [data-page="{name}"]').click()
