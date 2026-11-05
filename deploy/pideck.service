@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 User=pideck
 Group=pideck
-WorkingDirectory=/var/lib/pideck
+WorkingDirectory=/opt/pideck
 ExecStart=/opt/pideck/.venv/bin/python -m pideck --config /var/lib/pideck/config.yaml --no-prime
 StateDirectory=pideck
 StateDirectoryMode=0700
