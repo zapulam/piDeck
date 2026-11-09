@@ -220,3 +220,57 @@ def test_config_exposes_rotate(
         None: Assertions or fixture setup completed successfully.
     """
     assert client.get("/api/config").json()["rotate"] == 0
+
+
+def test_noop_prime_does_not_refresh_prune_clock(
+    client: TestClient,
+    ) -> None:
+    """
+    Rediscovering an unchanged idle session must keep activity_at and updated_at stable.
+
+    Args:
+        client (TestClient): Authenticated test client for the isolated application.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
+    first = post(
+        client, session_id="idle-1", state="idle", name="demo", agent="claude", activity_at=1_000.0,
+    ).json()["agent"]
+    assert first["activity_at"] == 1_000.0
+    again = post(
+        client, session_id="idle-1", state="idle", name="demo", agent="claude", activity_at=1_000.0,
+    ).json()["agent"]
+    assert again["updated_at"] == first["updated_at"]
+    assert again["activity_at"] == 1_000.0
+    live = post(client, session_id="idle-1", event="UserPromptSubmit", name="demo", agent="claude")
+    agent = live.json()["agent"]
+    assert agent["state"] == "working"
+    assert agent["activity_at"] >= again["activity_at"]
+    assert agent["updated_at"] >= again["updated_at"]
+    # Further live hooks while already working still advance activity (not a prime no-op).
+    busy = post(client, session_id="idle-1", event="PostToolUse", name="demo", agent="claude").json()["agent"]
+    assert busy["state"] == "working"
+    assert busy["activity_at"] >= agent["activity_at"]
+    assert busy["updated_at"] >= agent["updated_at"]
+
+
+def test_usage_note_is_published_without_waking_tiles(
+    client: TestClient,
+    ) -> None:
+    """
+    A failed provider fetch can publish a short note without recreating sessions.
+
+    Args:
+        client (TestClient): Authenticated test client for the isolated application.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
+    post(client, session_id="s", state="waiting", agent="claude")
+    response = post(
+        client, session_id="usage:claude", event="UsageUpdate", agent="claude", note="http_503",
+    )
+    assert response.status_code == 200
+    assert client.app.state.hub.state["agent_usage"]["claude"]["note"] == "http_503"
+    assert client.app.state.agents.agents["s"]["state"] == "waiting"

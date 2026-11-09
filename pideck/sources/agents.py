@@ -57,14 +57,18 @@ class AgentEvent(BaseModel):
     session_id: str = Field(max_length=128)
     event: Optional[str] = Field(None, max_length=64)      # Claude Code hook_event_name
     state: Optional[str] = Field(None, max_length=16)      # explicit override (idle/working/waiting/done/error)
-    name: Optional[str] = Field(None, max_length=64)       # tile label; defaults to the cwd folder name
+    name: Optional[str] = Field(None, max_length=64)       # tile label; summary/title preferred over id hash
     detail: Optional[str] = Field(None, max_length=64)     # extra public label, such as a model slug
     cwd: Optional[str] = Field(None, max_length=512)
     agent: Optional[str] = Field(None, max_length=16)      # which tool: claude (default) or codex
     context_pct: Optional[float] = Field(None, ge=0, le=100)
     usage: Optional[AccountUsage] = None
+    note: Optional[str] = Field(None, max_length=40)       # why account usage is unavailable
     message: Optional[str] = Field(None, max_length=500)
     parent_id: Optional[str] = Field(None, max_length=128)  # set when this tile is a subagent
+    # Last real activity (file mtime from prime, or receipt time from live hooks). Prune uses this,
+    # not receipt time of no-op rediscovery posts.
+    activity_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
 
 
 # --- Session registry ---
@@ -138,24 +142,49 @@ class AgentRegistry:
         kind = ev.agent if ev.agent in KINDS else (cur or {}).get("agent", "claude")
         prev_state = cur["state"] if cur else None
         name = ev.name or (cur or {}).get("name") or _name_from_cwd(ev.cwd) or ev.session_id[:8]
+        detail = ev.detail or (cur or {}).get("detail")
+        parent_id = ev.parent_id or (cur or {}).get("parent_id")
+        cwd = ev.cwd or (cur or {}).get("cwd")
+        context_pct = (
+            ev.context_pct if "context_pct" in ev.model_fields_set else (cur or {}).get("context_pct")
+        )
+        message = ev.message or ((cur or {}).get("message") if new_state == prev_state else None)
+        # Field-level change detection. Prime rediscovery posts activity_at from file mtime;
+        # unchanged prime re-posts must not refresh the prune clock. Live hooks omit
+        # activity_at and always count as real activity even when state stays the same.
+        changed = (
+            cur is None
+            or new_state != prev_state
+            or name != cur.get("name")
+            or detail != cur.get("detail")
+            or parent_id != cur.get("parent_id")
+            or cwd != cur.get("cwd")
+            or context_pct != cur.get("context_pct")
+            or message != cur.get("message")
+        )
+        prime_repost = "activity_at" in ev.model_fields_set and ev.activity_at is not None
+        if prime_repost:
+            activity_at = float(ev.activity_at)
+        else:
+            activity_at = now
         agent = {
             "id": ev.session_id,
             "name": name,
-            "detail": ev.detail or (cur or {}).get("detail"),
-            "parent_id": ev.parent_id or (cur or {}).get("parent_id"),
+            "detail": detail,
+            "parent_id": parent_id,
             "agent": kind,
-            "cwd": ev.cwd or (cur or {}).get("cwd"),
+            "cwd": cwd,
             "state": new_state,
-            "context_pct": ev.context_pct
-            if "context_pct" in ev.model_fields_set
-            else (cur or {}).get("context_pct"),
-            "message": ev.message or ((cur or {}).get("message") if new_state == prev_state else None),
-            "updated_at": now,
+            "context_pct": context_pct,
+            "message": message,
+            "updated_at": cur["updated_at"] if (cur and not changed and prime_repost) else now,
+            "activity_at": activity_at,
             "state_since": now if new_state != prev_state else (cur or {}).get("state_since", now),
         }
         self.agents[ev.session_id] = agent
         while len(self.agents) > MAX_SESSIONS:
-            del self.agents[min(self.agents, key=lambda k: self.agents[k]["updated_at"])]
+            del self.agents[min(self.agents, key=lambda k: self.agents[k].get(
+                "activity_at", self.agents[k]["updated_at"]))]
         await self._publish()
         await self._update_usage(ev, now)
 
@@ -178,16 +207,26 @@ class AgentRegistry:
         Publish account usage separately so status-line updates never change tile state.
 
         Args:
-            ev (AgentEvent): Incoming hook or status-line event containing optional usage windows.
+            ev (AgentEvent): Incoming hook or status-line event containing optional usage windows
+                and/or a short note explaining why bars are unavailable.
             now (float): Server receipt time in Unix seconds.
 
         Returns:
             None: No value is returned.
         """
-        if ev.usage is None or ev.agent not in KINDS:
+        if ev.agent not in KINDS:
+            return
+        if ev.usage is None and not ev.note:
             return
         usage = dict(self.hub.state.get("agent_usage", {}))
-        usage[ev.agent] = {**ev.usage.model_dump(), "updated_at": now}
+        entry = dict(usage.get(ev.agent) or {})
+        if ev.usage is not None:
+            entry = {**ev.usage.model_dump(), "updated_at": now}
+        if ev.note:
+            entry["note"] = ev.note
+        elif "note" in entry and ev.usage is not None:
+            entry.pop("note", None)
+        usage[ev.agent] = entry
         await self.hub.update("agent_usage", usage)
 
     async def _publish(
@@ -205,16 +244,22 @@ class AgentRegistry:
         self,
         ) -> None:
         """
-        Periodically remove sessions older than the configured stale interval.
+        Periodically remove sessions whose last real activity is older than stale_hours.
+
+        Uses activity_at when present so no-op prime rediscovery cannot keep idle tiles alive.
+        Default stale_hours is 24 so agents idle a day or more leave the board.
 
         Returns:
             None: No value is returned.
         """
-        stale = float(self.cfg.get("stale_hours", 12)) * 3600
+        stale = float(self.cfg.get("stale_hours", 24)) * 3600
         while True:
             await asyncio.sleep(60)
             cutoff = time.time() - stale
-            gone = [k for k, a in self.agents.items() if a["updated_at"] < cutoff]
+            gone = [
+                k for k, a in self.agents.items()
+                if float(a.get("activity_at") or a["updated_at"]) < cutoff
+            ]
             for k in gone:
                 del self.agents[k]
             if gone:

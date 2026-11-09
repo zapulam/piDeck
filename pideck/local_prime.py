@@ -35,6 +35,7 @@ def hook_script() -> Path | None:
 
 def launch_prime(
     url: str | None = None,
+    force_claude_usage: bool = False,
     ) -> None:
     """
     Post already-open sessions and the latest allowance sample. Failures stay quiet.
@@ -44,6 +45,8 @@ def launch_prime(
 
     Args:
         url (str | None): Owned local server address, preventing saved remote destination confusion.
+        force_claude_usage (bool): When True, bypass Claude's 30-minute usage throttle once so a
+            late piDeck launch still refreshes bars after Claude was already open.
 
     Returns:
         None: No value is returned.
@@ -60,6 +63,10 @@ def launch_prime(
         if url:
             env["PIDECK_URL"] = url
         env.pop("PIDECK_TOKEN", None)
+        if force_claude_usage:
+            env["PIDECK_FORCE_CLAUDE_USAGE"] = "1"
+        else:
+            env.pop("PIDECK_FORCE_CLAUDE_USAGE", None)
         subprocess.run(arguments, timeout=30, check=False, env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        **({"creationflags": 0x08000000} if os.name == "nt" else {}))

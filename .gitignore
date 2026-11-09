@@ -8,6 +8,7 @@ __pycache__/
 /dist/
 /*.spec
 /test-results/
+/artifacts/
 /run-desktop
 /run-desktop.cmd
 /piDeck.lnk

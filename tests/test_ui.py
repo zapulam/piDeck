@@ -198,7 +198,15 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                         "session_id": "ui-done:explore", "state": "working", "name": "Explore",
                         "agent": "claude", "parent_id": "ui-done",
                     })
-                    page.locator('[data-id="ui-done:explore"] .tag', has_text="sub of notes").wait_for()
+                    page.locator('[data-id="ui-done:explore"].subagent .subagent-badge').wait_for()
+                    page.locator('[data-id="ui-done:explore"] .tag.subagent-parent', has_text="of notes").wait_for()
+                    connector = page.locator('[data-id="ui-done:explore"].subagent').evaluate(
+                        """el => {
+                          const style = getComputedStyle(el, '::before');
+                          return style.borderLeftStyle + ' ' + style.borderBottomStyle;
+                        }"""
+                    )
+                    assert connector == "dashed dashed"
                 assert not errors
             finally:
                 screenshots = Path("test-results/browser")
@@ -527,8 +535,11 @@ def test_usage_bar_colors_and_unknown_values(
                         expect(bar).to_have_attribute("data-available", "true")
                         expect(bar).to_have_text("")
                         fill = bar.locator("div")
-                        assert fill.evaluate("el => getComputedStyle(el).backgroundImage") == "none"
-                        colors.append(fill.evaluate("el => getComputedStyle(el).backgroundColor"))
+                        stripe = fill.evaluate("el => getComputedStyle(el).backgroundImage")
+                        assert "repeating-linear-gradient" in stripe
+                        colors.append(bar.evaluate(
+                            "el => getComputedStyle(el).getPropertyValue('--usage-color').trim()"
+                        ))
                         assert bar.evaluate("el => el.offsetWidth") == 24
                     assert colors[0] == "rgb(95, 211, 176)"
                     assert colors[2] == "rgb(255, 210, 103)"
@@ -601,7 +612,15 @@ def test_compact_usage_focus_and_live_session_updates(
                 assert page.locator(".tile").count() == 0
                 assert page.evaluate("currentView()") == "agents"
                 assert page.locator(".usage-provider").count() == 3
-                assert page.locator(".usage-window .usage-bar").first.evaluate("el => el.offsetWidth") <= 180
+                assert page.locator(".usage-window .usage-bar").first.evaluate("el => el.offsetHeight") >= 12
+                assert page.evaluate("""() => {
+                  const windows = document.querySelector('.usage-windows');
+                  const bar = document.querySelector('.usage-window .usage-bar');
+                  if (!windows || !bar || windows.offsetWidth <= 24 || bar.offsetWidth !== windows.clientWidth) return false;
+                  const fill = getComputedStyle(bar.querySelector('div')).backgroundImage;
+                  const radius = getComputedStyle(bar).borderRadius;
+                  return fill.includes('repeating-linear-gradient') && parseFloat(radius) >= 999;
+                }""")
                 with httpx.Client(base_url=url, trust_env=False) as client:
                     client.post("api/agents/event", json={
                         "session_id": "focus-test", "state": "working", "agent": "codex", "name": "focus-test",

@@ -67,7 +67,12 @@ CURSOR_EVENTS = {
     "subagentStop": "Stop",
 }
 PRIME_LIMIT = 24
+# File mtime younger than this → primed tile is "working"; older (but still inside the
+# discover window) → "idle". Live hooks use EVENT_STATE instead of this threshold.
 WORKING_AGE_SECONDS = 120
+# Default discover/hide window: sessions with no real filesystem activity older than this
+# are not primed. Server prune uses the same 24h intent via activity_at / stale_hours.
+DEFAULT_PRIME_HOURS = 24
 
 
 # --- Private files and authenticated transport ---
@@ -582,6 +587,29 @@ def cursor_detail(
     return label or None
 
 
+def display_title(
+    *candidates: Any,
+    ) -> str | None:
+    """
+    First non-empty public title/summary suitable for a tile label.
+
+    Args:
+        *candidates (Any): Preferred display strings, most specific first. Prompt bodies and
+            transcript text must not be passed here.
+
+    Returns:
+        str | None: A single-line label capped at 64 characters, or None when nothing usable
+            is present.
+    """
+    for value in candidates:
+        if not isinstance(value, str):
+            continue
+        text = " ".join(value.split())
+        if text:
+            return text[:64]
+    return None
+
+
 def build_cursor_event(
     payload: dict[str, Any],
     env: Mapping[str, str],
@@ -596,6 +624,7 @@ def build_cursor_event(
     Returns:
         dict[str, Any] | None: A piDeck lifecycle or context-only event, or None for unrelated
             hooks. Context is cleared on later activity because preCompact is only a snapshot.
+            Public summary/title fields may label the tile; prompts and task bodies do not.
     """
     hook_name = payload.get("hook_event_name")
     event = CURSOR_EVENTS.get(hook_name)
@@ -615,7 +644,10 @@ def build_cursor_event(
         ev["parent_id"] = parent_id
     if hook_name in ("subagentStart", "subagentStop") and payload.get("subagent_type"):
         ev["name"] = str(payload["subagent_type"]).strip()[:64]
-    elif env.get("PIDECK_NAME"):
+    title = display_title(payload.get("summary"), payload.get("title"))
+    if title:
+        ev["name"] = title
+    elif env.get("PIDECK_NAME") and "name" not in ev:
         ev["name"] = env["PIDECK_NAME"]
     model = payload.get("subagent_model")
     if isinstance(model, str) and model.strip():
@@ -956,12 +988,12 @@ def stamp_fetch(
     when: float,
     ) -> None:
     """
-    Remember when a provider was last asked, even if the answer was unusable.
+    Remember when a provider last returned a usable allowance sample.
 
     Args:
         env (Mapping[str, str]): Environment mapping used to locate the cache.
         agent (str): Provider name, one of claude, codex, or cursor.
-        when (float): Unix time of the attempt.
+        when (float): Unix time of the successful fetch.
 
     Returns:
         None: No value is returned.
@@ -1445,31 +1477,58 @@ def claude_usage_from_body(
     return {"primary": primary, "secondary": secondary}
 
 
+def _usage_note_event(
+    agent: str,
+    note: str,
+    ) -> dict[str, Any]:
+    """
+    Build a usage-only event that surfaces why bars are unavailable.
+
+    Args:
+        agent (str): Provider name, one of claude, codex, or cursor.
+        note (str): Short status such as http_401 or missing_file.
+
+    Returns:
+        dict[str, Any]: A UsageUpdate carrying only the provider note.
+    """
+    return {
+        "session_id": "usage:" + agent,
+        "event": "UsageUpdate",
+        "agent": agent,
+        "note": str(note)[:40],
+    }
+
+
 def fetch_claude_usage(
     env: Mapping[str, str],
     opener: Callable[..., Any] | None = None,
     now: float | None = None,
+    force: bool = False,
     ) -> dict[str, Any] | None:
     """
     Ask Claude for allowance percents. The token is not included in the result.
 
     Args:
         env (Mapping[str, str]): Environment mapping used to find the local sign-in and the cache.
+            PIDECK_FORCE_CLAUDE_USAGE=1 bypasses the throttle once (used on piDeck launch).
         opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen, for tests.
         now (float | None): Current Unix time, or None to use the clock.
+        force (bool): When True, ask even if a successful sample was fetched recently.
 
     Returns:
-        dict[str, Any] | None: A usage-only Claude event, or None when a recent sample exists or the
-            service is unavailable.
+        dict[str, Any] | None: A usage Claude event on success, a note-only event when the attempt
+            fails, or None when a recent successful sample still throttles the request.
     """
     now = time.time() if now is None else now
-    if now - fetched_at(env, "claude") < CLAUDE_USAGE_INTERVAL:
+    force = force or env.get("PIDECK_FORCE_CLAUDE_USAGE") == "1"
+    # fetched_at advances only after a usable sample; failures must not burn the interval.
+    if not force and now - fetched_at(env, "claude") < CLAUDE_USAGE_INTERVAL:
         return None
-    stamp_fetch(env, "claude", now)
     token = read_claude_token(env)
     if not token:
-        note_fetch(env, "claude", claude_sign_in_note(env))
-        return None
+        note = claude_sign_in_note(env)
+        note_fetch(env, "claude", note)
+        return _usage_note_event("claude", note)
     request = urllib.request.Request(
         "https://api.anthropic.com/api/oauth/usage",
         headers={
@@ -1483,17 +1542,20 @@ def fetch_claude_usage(
         with (opener or safe_open)(request, timeout=5) as response:
             body = json.loads(response.read().decode("utf-8", "ignore"))
     except urllib.error.HTTPError as exc:
-        note_fetch(env, "claude", "http_" + str(exc.code))
-        return None
+        note = "http_" + str(exc.code)
+        note_fetch(env, "claude", note)
+        return _usage_note_event("claude", note)
     except (OSError, ValueError) as exc:
-        note_fetch(env, "claude", "bad_json" if isinstance(exc, ValueError) else type(exc).__name__)
-        return None
+        note = "bad_json" if isinstance(exc, ValueError) else type(exc).__name__
+        note_fetch(env, "claude", note)
+        return _usage_note_event("claude", note)
     usage = claude_usage_from_body(body)
     if not usage:
         note_fetch(env, "claude", "unrecognized")
-        return None
+        return _usage_note_event("claude", "unrecognized")
     event = {"session_id": "usage:claude", "event": "UsageUpdate", "agent": "claude", "usage": usage}
     remember_usage(event, env)
+    stamp_fetch(env, "claude", now)
     return event
 
 
@@ -1578,27 +1640,31 @@ def discover_sessions(
     Args:
         home (Path): Home directory containing .claude, .codex, and .cursor.
         now (float): Current Unix time.
-        stale_seconds (float): Ignore files older than this.
+        stale_seconds (float): Ignore files older than this (default 24h via PIDECK_PRIME_HOURS).
 
     Returns:
-        list[dict[str, Any]]: Lifecycle events with a project name and idle or working state. No
-            transcript text.
+        list[dict[str, Any]]: Lifecycle events with a project or summary label, idle or working
+            state, and activity_at from file mtime. No transcript text.
     """
     events = []
+    title_keys = ("title", "summary", "customTitle", "display_name", "displayName")
     for modified, path in _recent_files(home / ".claude" / "projects", "*.jsonl", now, stale_seconds):
         if "subagents" in path.parts:
             continue
-        fields = _header_fields(path, ("sessionId", "cwd"))
+        fields = _header_fields(path, ("sessionId", "cwd") + title_keys)
         session_id = fields.get("sessionId") or path.stem
         if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
             continue
         cwd = fields.get("cwd")
+        label = display_title(*(fields.get(key) for key in title_keys))
         event = {
             "session_id": session_id,
+            # working = touched within WORKING_AGE_SECONDS; otherwise idle inside the discover window.
             "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
             "agent": "claude",
             "cwd": cwd,
-            "name": Path(cwd).name if cwd else path.parent.name.split("-")[-1],
+            "name": label or (Path(cwd).name if cwd else path.parent.name.split("-")[-1]),
+            "activity_at": modified,
         }
         pct = context_pct(str(path), claude_context_window(path))
         if pct is not None:
@@ -1606,18 +1672,20 @@ def discover_sessions(
         events.append(event)
     newest_codex = None
     for modified, path in _recent_files(home / ".codex" / "sessions", "*.jsonl", now, stale_seconds):
-        fields = _header_fields(path, ("session_id", "cwd"))
+        fields = _header_fields(path, ("session_id", "cwd") + title_keys)
         named = re.search(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", path.name)
         session_id = fields.get("session_id") or (named.group(0) if named else None)
         if not session_id:
             continue
         cwd = fields.get("cwd")
+        label = display_title(*(fields.get(key) for key in title_keys))
         event = {
             "session_id": session_id,
             "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
             "agent": "codex",
             "cwd": cwd,
-            "name": Path(cwd).name if cwd else "codex",
+            "name": label or (Path(cwd).name if cwd else "codex"),
+            "activity_at": modified,
         }
         if newest_codex is None:
             newest_codex = path
@@ -1637,11 +1705,14 @@ def discover_sessions(
             session_id = path.parent.name
             if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
                 continue
+            fields = _header_fields(path, title_keys)
+            label = display_title(*(fields.get(key) for key in title_keys))
             events.append({
                 "session_id": "cursor:" + session_id,
                 "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
                 "agent": "cursor",
-                "name": name,
+                "name": label or name,
+                "activity_at": modified,
             })
     return events
 
@@ -1666,7 +1737,7 @@ def prime_events(
     """
     now = time.time() if now is None else now
     home = Path(env.get("PIDECK_HOME") or Path.home())
-    stale = float(env.get("PIDECK_PRIME_HOURS") or 6) * 3600
+    stale = float(env.get("PIDECK_PRIME_HOURS") or DEFAULT_PRIME_HOURS) * 3600
     events = cached_usage_events(env)
     events.extend(discover_sessions(home, now, stale))
     claude = fetch_claude_usage(env, opener, now)

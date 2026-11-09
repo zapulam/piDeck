@@ -6,7 +6,7 @@ const VIEWS = {
   slack:       { label: "Slack",   render: renderSlack },
   settings:    { label: "Settings", render: renderSettings },
 };
-const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], agent_usage: {}, seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8, agents_stale_hours: 12 } };
+const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], agent_usage: {}, seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8, agents_stale_hours: 24 } };
 let frame = 0;
 const motions = new Map();
 const completionSeen = (() => {
@@ -144,18 +144,21 @@ function tileHtml(a, peers) {
   const status = a.state === "working" ? "working" : a.state === "waiting" ? "needs you" : a.state;
   const same = peers.filter((b) => b.name === a.name);
   const parent = a.parent_id && S.agents.find((b) => b.id === a.parent_id);
+  const isSub = Boolean(a.parent_id);
   const bits = [];
-  if (parent) bits.push("sub of " + parent.name);
   if (a.detail) bits.push(a.detail);
   if (same.length > 1) bits.push("#" + sessionTag(a.id));
   const mark = bits.join(" · ");
   const seed = same.length > 1 ? a.id : a.name;
   const unseen = a.state === "done" && completionSeen.get(a.id) !== a.state_since;
-  return `<div class="tile" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%"
+  const parentLabel = parent ? parent.name : (isSub ? "parent" : "");
+  return `<div class="tile${isSub ? " subagent" : ""}" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}"${isSub ? ` data-subagent="true" data-parent-id="${esc(a.parent_id)}"` : ""} style="--ctx:${ctx ?? 0}%"
     ${unseen ? `data-unseen="true" role="button" tabindex="0" aria-label="${esc(a.name)} completed. Mark as seen" title="Click to mark this session as seen"` : ""}>
     ${unseen ? `<span class="completion-badge" role="img" aria-label="Unseen completion">✓</span>` : ""}
+    ${isSub ? `<span class="subagent-badge" title="Subagent of ${esc(parentLabel)}">sub</span>` : ""}
     <div class="sprite"><canvas width="12" height="12"></canvas><span class="thinking" role="img" aria-label="Thinking" hidden><i></i><i></i><i></i></span></div>
-    <div class="name">${esc(a.name)}</div>
+    <div class="name" title="${esc(a.name)}">${esc(a.name)}</div>
+    ${isSub ? `<div class="tag subagent-parent">of ${esc(parentLabel)}</div>` : ""}
     ${mark ? `<div class="tag">${esc(mark)}</div>` : ""}
     <div class="meta"><b>${status}</b></div>
     <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"}${ctx == null ? " unavailable" : ""}</div>
@@ -197,8 +200,20 @@ function usageBar(window, name) {
       `role="img" aria-label="${esc(name + " " + window.label)} usage unavailable"` :
       `role="progressbar" aria-label="${esc(name + " " + window.label)} account usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${window.pct}"`}><div></div></div>`;
 }
-function usageReset(window) {
-  if (window.pct == null) return window.expired ? "Awaiting a new usage sample" : "Usage unavailable";
+function usageNoteLabel(note) {
+  if (!note) return "Usage unavailable";
+  if (note.startsWith("http_")) return "Provider returned " + note.slice(5);
+  if (note === "missing_file" || note === "no_sign_in") return "Sign-in not found";
+  if (note.startsWith("token_") || note === "unreadable" || note === "bad_json") return "Sign-in unreadable";
+  if (note === "unrecognized") return "Usage response unrecognized";
+  if (note.startsWith("refresh_")) return "Sign-in refresh failed";
+  return "Usage unavailable";
+}
+function usageReset(window, note) {
+  if (window.pct == null) {
+    if (window.expired) return "Awaiting a new usage sample";
+    return usageNoteLabel(note);
+  }
   const seconds = window.resets - Date.now() / 1000;
   let reset = "Reset time unavailable";
   if (Number.isFinite(seconds) && seconds > 0) {
@@ -209,12 +224,14 @@ function usageReset(window) {
 }
 function renderUsage(list, detailed = false) {
   const providers = usageProviders(list);
-  if (detailed) return providers.length ? providers.map(({ kind, name, windows }) =>
-    `<div class="usage-provider" data-provider="${kind}" data-selected="${selectedUsage === kind}" role="group" aria-label="${name} usage">
+  if (detailed) return providers.length ? providers.map(({ kind, name, windows }) => {
+    const note = S.agent_usage[kind]?.note;
+    return `<div class="usage-provider" data-provider="${kind}" data-selected="${selectedUsage === kind}" role="group" aria-label="${name} usage">
       <div class="usage-provider-logo" title="${name}">${providerLogo(kind)}</div><div class="usage-windows">${windows.map((window) =>
         `<div class="usage-window" data-window="${window.key}"><div class="usage-window-heading"><span>${esc(window.label === "5h" ? "5-hour session" : window.label)}</span>
           <b>${window.pct == null ? "—" : Math.round(window.pct) + "%"}</b></div>${usageBar(window, name)}
-          <small>${esc(usageReset(window))}</small></div>`).join("")}</div></div>`).join("") :
+          <small>${esc(usageReset(window, note))}</small></div>`).join("")}</div></div>`;
+  }).join("") :
     `<div class="empty">No account usage yet.<br>Usage appears when a provider reports its allowance.</div>`;
   return providers.length ? `<aside class="usage-dock" data-drag-usage aria-label="Account usage">
     <button type="button" class="usage-grab" data-drag-usage aria-label="Move usage panel" title="Drag to an edge, or use the arrow keys"><span class="drag-grip" aria-hidden="true"></span></button>
@@ -228,10 +245,13 @@ function miniAgents(list) {
     return `<div class="mini-group">${providerLogo(kind)}${items.map((a) => {
       const same = items.filter((other) => other.name === a.name);
       const unseen = a.state === "done" && completionSeen.get(a.id) !== a.state_since;
-      return `<button type="button" class="mini-session" data-open-agent="${esc(a.id)}" data-id="${esc(a.id)}" data-state="${a.state}"
-        data-name="${esc(a.name)}" data-seed="${esc(same.length > 1 ? a.id : a.name)}" data-unseen="${unseen}"
-        aria-label="Show ${esc(a.name)}, ${PROVIDERS[kind]}, ${esc(a.state)}" title="${esc(a.name)} · ${esc(a.state)}">
-        <canvas width="12" height="12" aria-hidden="true"></canvas>${unseen ? `<span class="mini-completion" aria-label="Unseen completion">✓</span>` : ""}</button>`;
+      const isSub = Boolean(a.parent_id);
+      const parent = isSub && S.agents.find((b) => b.id === a.parent_id);
+      const title = isSub ? `${a.name} · sub of ${parent?.name || "parent"} · ${a.state}` : `${a.name} · ${a.state}`;
+      return `<button type="button" class="mini-session${isSub ? " subagent" : ""}" data-open-agent="${esc(a.id)}" data-id="${esc(a.id)}" data-state="${a.state}"
+        data-name="${esc(a.name)}" data-seed="${esc(same.length > 1 ? a.id : a.name)}" data-unseen="${unseen}"${isSub ? ` data-subagent="true"` : ""}
+        aria-label="Show ${esc(a.name)}, ${PROVIDERS[kind]}, ${esc(a.state)}" title="${esc(title)}">
+        <canvas width="12" height="12" aria-hidden="true"></canvas>${isSub ? `<span class="mini-sub" aria-hidden="true">↳</span>` : ""}${unseen ? `<span class="mini-completion" aria-label="Unseen completion">✓</span>` : ""}</button>`;
     }).join("")}</div>`;
   }).join("");
 }
@@ -263,9 +283,23 @@ function renderAgents(sec) {
           || ORDER[a.state] - ORDER[b.state] || b.updated_at - a.updated_at);
       if (!items.length) return "";
       const label = PROVIDERS[kind] || kind;
+      const ids = new Set(items.map((a) => a.id));
+      const childrenOf = (id) => items.filter((a) => a.parent_id === id);
+      const roots = items.filter((a) => !a.parent_id || !ids.has(a.parent_id));
+      const rendered = new Set();
+      const clusters = roots.map((root) => {
+        const kids = childrenOf(root.id);
+        rendered.add(root.id);
+        for (const kid of kids) rendered.add(kid.id);
+        if (!kids.length) return tileHtml(root, items);
+        return `<div class="agent-cluster" data-parent-id="${esc(root.id)}">${tileHtml(root, items)}${kids.map((kid) => tileHtml(kid, items)).join("")}</div>`;
+      });
+      for (const leftover of items) {
+        if (!rendered.has(leftover.id)) clusters.push(tileHtml(leftover, items));
+      }
       return `<div class="agent-group" data-provider="${esc(kind)}"><h3><button type="button" class="group-handle" data-drag-group="${esc(kind)}"
         aria-label="Move ${esc(label)} group" title="Drag to reorder, or use the up and down arrow keys"><span class="drag-grip" aria-hidden="true"></span>${providerLogo(kind)}${esc(label)}</button></h3>
-        <div class="grid">${items.map((a) => tileHtml(a, items)).join("")}</div></div>`;
+        <div class="grid">${clusters.join("")}</div></div>`;
     }).join("");
   }
   sec.classList.add("agents-page");

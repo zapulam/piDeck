@@ -160,12 +160,21 @@ def create_app(
                     """
                     Reload local sessions and allowance bars until the server stops.
 
+                    The first pass forces a Claude usage fetch so opening piDeck after Claude still
+                    refreshes bars despite the normal 30-minute throttle.
+
                     Returns:
                         None: No value is returned.
                     """
+                    force_claude = True
                     while True:
-                        await asyncio.to_thread(launch_prime, getattr(app.state, "prime_url",
-                                                f"http://127.0.0.1:{cfg['server']['port']}/"))
+                        await asyncio.to_thread(
+                            launch_prime,
+                            getattr(app.state, "prime_url",
+                                    f"http://127.0.0.1:{cfg['server']['port']}/"),
+                            force_claude,
+                        )
+                        force_claude = False
                         await asyncio.sleep(900)
 
                 tasks.append(asyncio.create_task(_refresh_prime()))
@@ -250,7 +259,7 @@ def create_app(
         return {"views": load_saved_views(config_file, cfg["views"]), "alert_seconds": secs,
                 "mock": cfg["mock"], "rotate": cfg["ui"]["rotate"],
                 "desktop": desktop,
-                "agents_stale_hours": mods["agents"].get("stale_hours", 12)}
+                "agents_stale_hours": mods["agents"].get("stale_hours", 24)}
 
     @app.post("/api/session", dependencies=[Depends(require_access)])
     async def login(
