@@ -73,8 +73,44 @@ button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
 .provider-fallback { display: grid; place-items: center; width: 16px; height: 16px; color: var(--dim); font-size: 11px; }
 .group-handle .provider-logo, .group-handle .provider-fallback { margin-right: 7px; }
 .usage-pair { display: flex; flex-direction: column; gap: 3px; width: 24px; }
-.usage-bar { width: 100%; height: 3px; background: var(--line); overflow: hidden; }
-.usage-bar > div { width: var(--used); height: 100%; background-color: var(--usage-color); }
+/* Segmented diagonal stripe meters (dock stays compact; usage tab thickens below). */
+.usage-bar {
+  --stripe: 2px;
+  --gap: 2px;
+  --track-pad: 0px;
+  --stripe-dim: #2a3344;
+  position: relative;
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+.usage-bar::before,
+.usage-bar > div {
+  position: absolute;
+  top: var(--track-pad);
+  bottom: var(--track-pad);
+  left: var(--track-pad);
+  border-radius: inherit;
+  background-image: repeating-linear-gradient(
+    -55deg,
+    var(--stripe-tone) 0 var(--stripe),
+    transparent var(--stripe) calc(var(--stripe) + var(--gap))
+  );
+  pointer-events: none;
+}
+.usage-bar::before {
+  content: "";
+  right: var(--track-pad);
+  --stripe-tone: var(--stripe-dim);
+}
+.usage-bar > div {
+  right: var(--track-pad);
+  --stripe-tone: var(--usage-color);
+  clip-path: inset(0 calc(100% - var(--used)) 0 0);
+}
 .usage-bar[data-available=false] { opacity: .4; }
 .agents-page[data-dock=left] .usage-dock { border-left: 0; border-right: 1px solid var(--line); }
 .agents-page:is([data-dock=top],[data-dock=bottom]) .usage-dock { grid-template-rows: 1fr; grid-template-columns: 14px; grid-auto-flow: column; grid-auto-columns: 44px; height: 44px; width: max-content; max-width: 100%; justify-self: end; border: 0; }
@@ -87,6 +123,9 @@ button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
 .mini-session[data-state=working] { border-color: var(--working); }
 .mini-session[data-state=working] canvas { animation: hop 1.6s ease-in-out infinite; }
 .mini-session[data-state=waiting] { border-color: var(--waiting); }
+.mini-session.subagent { margin-left: 8px; width: 28px; height: 28px; border-style: dashed; opacity: .92; }
+.mini-session.subagent canvas { width: 20px; height: 20px; }
+.mini-sub { position: absolute; left: -2px; bottom: -3px; color: var(--dim); font-size: 10px; line-height: 1; }
 .mini-completion { position: absolute; right: -2px; top: -4px; color: var(--done); font-size: 11px; }
 .usage-details { grid-area: details; overflow-y: auto; scrollbar-width: none; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .usage-provider { display: grid; grid-template-columns: 40px minmax(0,1fr); align-items: center; gap: 16px; min-height: 118px; flex: 1 0 auto; padding: 10px; border-bottom: 1px solid var(--line); }
@@ -98,12 +137,62 @@ button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
 .usage-window { min-width: 0; }
 .usage-window-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 4px; }
 .usage-window-heading b { font-weight: 600; white-space: nowrap; }
-.usage-window .usage-bar { height: 4px; }
+.usage-window .usage-bar {
+  height: 8px;
+  --stripe: 3px;
+  --gap: 3px;
+  --track-pad: 1px;
+  border: 1px solid color-mix(in srgb, var(--usage-color) 45%, var(--line));
+}
 .usage-window small { display: block; margin-top: 4px; color: var(--dim); font-size: 10px; }
+/* Usage tab detail view: bars fill the available viewport; dock/mini stay compact above. */
+.agents-page[data-mode=usage] .usage-details { justify-content: stretch; }
+.agents-page[data-mode=usage] .usage-provider { flex: 1 1 0; min-height: 0; align-items: stretch; padding: 14px 12px; }
+.agents-page[data-mode=usage] .usage-windows { width: 100%; max-width: none; flex: 1; justify-content: center; gap: clamp(14px, 4vh, 28px); }
+.agents-page[data-mode=usage] .usage-window { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.agents-page[data-mode=usage] .usage-window .usage-bar {
+  height: clamp(14px, 3.8vh, 30px);
+  --stripe: 5px;
+  --gap: 4px;
+  --track-pad: 3px;
+  border: 2px solid color-mix(in srgb, var(--usage-color) 70%, var(--line));
+  border-radius: 999px;
+}
+.agents-page[data-mode=usage] .usage-window-heading { font-size: 12px; margin-bottom: 8px; }
+.agents-page[data-mode=usage] .usage-window small { margin-top: 8px; font-size: 11px; }
 .context-track { height: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 10px; align-items: start; }
+.agent-cluster { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .tile { position: relative; background: var(--panel); border: 2px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
   display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
+.tile.subagent {
+  margin-left: 26px;
+  overflow: visible;
+  background: var(--panel-2);
+  border-left-color: color-mix(in srgb, var(--working) 45%, var(--line));
+}
+/* Dashed elbow from the parent above down into the indented subagent tile. */
+.tile.subagent::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: -18px;
+  top: -12px;
+  width: 16px;
+  height: calc(50% + 12px);
+  border-left: 2px dashed var(--working);
+  border-bottom: 2px dashed var(--working);
+  opacity: .95;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.agent-cluster > .tile.subagent::before {
+  top: -11px;
+  height: calc(50% + 11px);
+}
+.subagent-badge { position: absolute; top: 7px; left: 7px; padding: 1px 6px; border-radius: 999px; background: rgba(87,157,255,.18);
+  color: var(--working); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.tile .tag.subagent-parent { color: var(--dim); letter-spacing: 0; text-transform: none; }
 .context-label { color: var(--dim); font-size: 10px; }
 .context-track { width: 85%; height: 3px; }
 .context-track > div { height: 100%; width: var(--ctx); background: var(--c); }

@@ -28,7 +28,7 @@ DEFAULTS: dict[str, Any] = {
         "agents": {
             "enabled": True,
             "alert_on": ["done", "waiting"],
-            "stale_hours": 12,
+            "stale_hours": 24,
             "context_window": 200000,
         },
         "spotify": {"enabled": True, "poll_seconds": 3},

@@ -152,8 +152,10 @@ def test_cursor_subagent_is_tagged_to_its_parent_without_the_task() -> None:
     assert hook.cursor_hook_response("subagentStart") == {"permission": "allow"}
     stop = hook.build_event({"hook_event_name": "subagentStop", "subagent_id": "child",
                              "parent_conversation_id": "parent", "subagent_type": "generalPurpose",
-                             "status": "completed", "summary": "private summary"}, {}, "cursor")
+                             "status": "completed", "summary": "Investigate auth flow",
+                             "task": "private task text"}, {}, "cursor")
     assert stop["session_id"] == "cursor:sub:child" and stop["event"] == "Stop"
+    assert stop["name"] == "Investigate auth flow"
     assert "private" not in json.dumps(stop)
 
 

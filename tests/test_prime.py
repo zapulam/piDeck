@@ -39,12 +39,12 @@ def test_discover_sessions_uses_project_names_and_skips_old_files(
     claude.mkdir(parents=True)
     (claude / "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl").write_text(
         json.dumps({"type": "user", "sessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                    "cwd": "C:/work/demo", "message": "private prompt"}) + "\n",
+                    "cwd": "C:/work/demo", "title": "Wire up auth", "message": "private prompt"}) + "\n",
         encoding="utf-8",
     )
     old = claude / "11111111-2222-3333-4444-555555555555.jsonl"
     old.write_text("{}\n", encoding="utf-8")
-    old_time = now - 10 * 3600
+    old_time = now - 25 * 3600
     import os
     os.utime(old, (old_time, old_time))
     codex = tmp_path / ".codex" / "sessions" / "03"
@@ -62,11 +62,12 @@ def test_discover_sessions_uses_project_names_and_skips_old_files(
         json.dumps({"role": "user", "message": {"content": [{"text": "private"}]}}) + "\n",
         encoding="utf-8",
     )
-    events = hook.discover_sessions(tmp_path, now, 6 * 3600)
+    events = hook.discover_sessions(tmp_path, now, 24 * 3600)
     dumped = json.dumps(events)
     assert "private" not in dumped
     by_agent = {ev["agent"]: ev for ev in events}
-    assert by_agent["claude"]["name"] == "demo" and by_agent["claude"]["state"] == "working"
+    assert by_agent["claude"]["name"] == "Wire up auth" and by_agent["claude"]["state"] == "working"
+    assert by_agent["claude"]["activity_at"]
     assert by_agent["codex"]["session_id"] == "01999999-aaaa-7bbb-8ccc-ddddeeeeffff"
     assert by_agent["codex"]["name"] == "site"
     assert by_agent["cursor"]["name"] == "piDeck"
@@ -442,3 +443,96 @@ def test_claude_usage_posts_percents_and_backs_off(
     assert "secret-token" not in dumped
     assert hook.fetch_claude_usage(env, opener, now=1_000_100) is None
     assert calls == ["Bearer secret-token"]
+    forced = hook.fetch_claude_usage(env, opener, now=1_000_100, force=True)
+    assert forced["usage"]["primary"]["used_pct"] == 22
+    assert len(calls) == 2
+
+
+def test_claude_usage_failure_does_not_burn_throttle(
+    tmp_path: Path,
+    ) -> None:
+    """
+    A failed Claude usage ask must not stamp fetched_at, so the next prime can retry.
+
+    Args:
+        tmp_path (Path): Temporary directory owned and cleaned up by pytest.
+
+    Returns:
+        None: Assertions or fixture setup completed successfully.
+    """
+    creds = tmp_path / "credentials.json"
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret-token"}}), encoding="utf-8")
+    env = {"CLAUDE_CREDENTIALS": str(creds), "PIDECK_CONFIG": str(tmp_path / "hook.json")}
+    calls = []
+
+    def opener(
+        request: urllib.request.Request,
+        timeout: float,
+        ) -> Any:
+        """
+        Reject the first Claude usage request, then return a valid body.
+
+        Args:
+            request (urllib.request.Request): Outgoing Anthropic usage request.
+            timeout (float): Maximum duration allowed for the simulated HTTP operation.
+
+        Returns:
+            Any: Raises on the first call; later returns a JSON usage response.
+        """
+        calls.append(1)
+        assert timeout == 5
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(request.full_url, 503, "busy", None, None)
+
+        class Response:
+            def read(
+                self,
+                ) -> bytes:
+                """
+                Encode a successful Claude usage payload.
+
+                Returns:
+                    bytes: JSON body with five_hour utilization.
+                """
+                return json.dumps({
+                    "five_hour": {"utilization": 9, "resets_at": "2026-11-04T12:00:00Z"},
+                    "seven_day": {"utilization": 11, "resets_at": "2026-11-08T12:00:00Z"},
+                }).encode()
+
+            def __enter__(
+                self,
+                ) -> Self:
+                """
+                Enter the simulated HTTP response context.
+
+                Returns:
+                    Self: This context-managed response instance.
+                """
+                return self
+
+            def __exit__(
+                self,
+                *args: Any,
+                ) -> bool:
+                """
+                Leave the simulated HTTP response context without suppressing exceptions.
+
+                Args:
+                    *args (Any): Standard context-manager exit arguments.
+
+                Returns:
+                    bool: False so exceptions are never suppressed.
+                """
+                return False
+
+        return Response()
+
+    failed = hook.fetch_claude_usage(env, opener, now=2_000_000)
+    assert failed == {
+        "session_id": "usage:claude", "event": "UsageUpdate", "agent": "claude", "note": "http_503",
+    }
+    assert hook.fetched_at(env, "claude") == 0
+    recovered = hook.fetch_claude_usage(env, opener, now=2_000_010)
+    assert recovered["usage"]["primary"]["used_pct"] == 9
+    assert hook.fetched_at(env, "claude") == 2_000_010
+    assert len(calls) == 2
