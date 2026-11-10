@@ -32,7 +32,8 @@ def source_paths(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
         cwd=root, capture_output=True, check=True,
     )
-    return sorted({root / name.decode("utf-8") for name in result.stdout.split(b"\0") if name})
+    return sorted({root / name.decode("utf-8") for name in result.stdout.split(b"\0")
+                   if name and (root / name.decode("utf-8")).is_file()})
 
 
 # --- Documentation and layout validation ---

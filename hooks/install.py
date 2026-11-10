@@ -24,7 +24,6 @@ import argparse
 import json
 import os
 import shutil
-import stat
 import sys
 import time
 import urllib.error
@@ -40,9 +39,10 @@ except ImportError:
 
 MARK = "pideck_hook.py"  # how we recognise our own hook entries
 
-CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SubagentStart", "SubagentStop", "SessionEnd"]
-CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]  # Codex has no Notification/SessionEnd
-CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "preCompact", "stop", "subagentStart", "subagentStop", "sessionEnd"]
+CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+                 "PermissionRequest", "Notification", "Stop", "StopFailure", "SubagentStart", "SubagentStop", "SessionEnd"]
+CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "Interrupt", "SessionEnd"]
+CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "preToolUse", "postToolUse", "postToolUseFailure", "stop", "subagentStart", "subagentStop", "sessionEnd"]
 
 
 # --- Shared configuration helpers ---
@@ -144,7 +144,7 @@ def read_json(
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text() or "{}")
+        data = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
     except ValueError as e:
         raise InstallError(f"{path} isn't valid JSON ({e}). I haven't touched it; fix or move it and re-run.")
     if not isinstance(data, dict):
@@ -169,7 +169,7 @@ def write_json(
         bool: True when the settings file changed or would change in dry-run mode.
     """
     new = json.dumps(data, indent=2) + "\n"
-    old = path.read_text() if path.exists() else None
+    old = path.read_text(encoding="utf-8-sig") if path.exists() else None
     if old == new:
         return False
     if dry:
@@ -272,10 +272,8 @@ def install_statusline(
     data = read_json(path)
     original = data.get("statusLine")
     if _is_ours(original or {}):
-        if original.get("refreshInterval") == 60:
-            return False
-        original["refreshInterval"] = 60
-        data["statusLine"] = original
+        data["statusLine"] = {**original, "command": command_for(script, "claude") + " --statusline",
+                              "refreshInterval": 60}
         return write_json(path, data, dry)
     if not dry:
         cfg = conf_dir(home) / "hook.json"
@@ -368,7 +366,7 @@ def save_settings(
     if not dry:
         d.mkdir(parents=True, exist_ok=True)
         try:
-            conf = json.loads(f.read_text())
+            conf = json.loads(f.read_text(encoding="utf-8-sig"))
         except Exception:
             conf = {}
         conf["url"] = url
@@ -395,8 +393,49 @@ def copy_script(
     dest = conf_dir(home) / MARK
     if not dry:
         conf_dir(home).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(Path(__file__).with_name(MARK), dest)
+        for name in (MARK, "event_store.py", "runtime.py"):
+            private_write(conf_dir(home) / name, Path(__file__).with_name(name).read_text(encoding="utf-8"))
     return dest
+
+
+def install_engine_bridge(
+    home: Path,
+    script: Path,
+    dry: bool,
+    ) -> None:
+    """
+    Forward Claude Desktop engine measurements without opening account credential files.
+
+    Args:
+        home (Path): User home containing the provider's mods directory.
+        script (Path): Installed metadata-only hook helper.
+        dry (bool): Whether to report a proposed installation without writing files.
+
+    Returns:
+        None: An isolated piDeck mod is installed; unrelated provider mods stay untouched.
+    """
+    if dry:
+        return
+    executable = Path(sys.executable)
+    if getattr(sys, "frozen", False):
+        executable = executable.with_name("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
+    argv = [str(executable), str(script), "--engine"]
+    template = Path(__file__).with_name("claude_engine.ts").read_text(encoding="utf-8")
+    directory = home / ".claude/mods/pideck-usage/hooks"
+    private_write(directory / "register.ts", template.replace("__COMMAND__", json.dumps(argv)))
+    private_write(directory / "hooks.json", '{"modules":["./register.ts"]}\n')
+    private_write(directory.parent / ".claude-plugin/plugin.json", json.dumps({
+        "name": "pideck-usage", "version": "1.0.0",
+        "description": "Report numeric engine usage to the local piDeck helper.",
+    }) + "\n")
+    settings_path = home / ".claude/settings.json"
+    settings = read_json(settings_path)
+    environment = settings.setdefault("env", {})
+    paths = [path for path in environment.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(os.pathsep) if path]
+    if str(directory.parent) not in paths:
+        paths.append(str(directory.parent))
+    environment["CLAUDE_CODE_PLUGIN_DIRS"] = os.pathsep.join(paths)
+    write_json(settings_path, settings, False)
 
 
 def _request(
@@ -479,12 +518,7 @@ def run_test(
     print("  A tile named 'install test' should appear on the display...")
     time.sleep(2)
     ev(state="done", message="piDeck hooks are installed")
-    print("  ...and a full-screen alert. Cleaning up in a few seconds.")
-    time.sleep(6)
-    try:
-        _request(base + "/api/agents/event", token, "POST", {"session_id": sid, "event": "SessionEnd"})
-    except Exception:
-        pass
+    print("  ...and a full-screen alert. Use Dismiss on the test card when finished.")
 
 
 def main(
@@ -534,6 +568,21 @@ def main(
             if update_cursor_hooks(cursor_file, conf_dir(home) / MARK, dry, uninstall=True):
                 print(f"{'Would remove' if dry else 'Removed'} piDeck hooks from {cursor_file} (Cursor)")
             if not dry:
+                settings = read_json(claude_file)
+                environment = settings.get("env", {})
+                bridge = home / ".claude/mods/pideck-usage"
+                paths = [path for path in environment.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(os.pathsep)
+                         if path and path != str(bridge)]
+                if paths:
+                    environment["CLAUDE_CODE_PLUGIN_DIRS"] = os.pathsep.join(paths)
+                else:
+                    environment.pop("CLAUDE_CODE_PLUGIN_DIRS", None)
+                if not environment:
+                    settings.pop("env", None)
+                if claude_file.is_file():
+                    write_json(claude_file, settings, False)
+                for owned in (bridge / "hooks/register.ts", bridge / "hooks/hooks.json", bridge / ".claude-plugin/plugin.json"):
+                    owned.unlink(missing_ok=True)
                 shutil.rmtree(conf_dir(home), ignore_errors=True)
             print("Uninstalled." if not dry else "(dry run: nothing changed)")
             return 0
@@ -566,17 +615,17 @@ def main(
         if want_claude:
             changed = install_target(claude_file, CLAUDE_EVENTS, script, "claude", dry)
             changed = install_statusline(home, claude_file, script, dry) or changed
+            install_engine_bridge(home, script, dry)
             print(f"Claude Code: {'hooks added to' if changed else 'already up to date in'} {claude_file}")
-            print("  Account usage connected through the status line; existing output is preserved.")
+            print("  Claude Desktop usage connects through its engine mod (v2.1.280+); CLI status-line output is preserved.")
         if want_codex:
             changed = install_target(codex_file, CODEX_EVENTS, script, "codex", dry)
             print(f"Codex: {'hooks added to' if changed else 'already up to date in'} {codex_file}")
-            print("  If Codex doesn't report in, your version may need hooks switched on: add\n"
-                  "  [features]\\n  codex_hooks = true   to ~/.codex/config.toml")
+            print("  Review the updated hooks in Codex if prompted. Account usage uses its local app-server.")
         if want_cursor:
             changed = update_cursor_hooks(cursor_file, script, dry)
             print(f"Cursor: {'hooks added to' if changed else 'already up to date in'} {cursor_file}")
-            print("  Context is reported before compaction; account allowances are not exposed by Cursor hooks.")
+            print("  Context comes from local conversation metadata; personal account allowances are unavailable.")
         if dry:
             print("(dry run: nothing changed)")
             return 0

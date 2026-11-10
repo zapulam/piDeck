@@ -23,6 +23,8 @@ hidden = ["uvicorn.logging", "uvicorn.loops.asyncio", "uvicorn.protocols.http.h1
 hidden += ["webview.platforms.winforms", "webview.platforms.edgechromium", "keyring.backends.Windows"] if windows else ["webview.platforms.cocoa", "keyring.backends.macOS"]
 data = [(str(root / "pideck/ui"), "pideck/ui"), (str(root / "pideck/assets"), "pideck/assets"),
         (str(root / ".env.example"), "."), (str(root / "hooks/pideck_hook.py"), "hooks"),
+        (str(root / "hooks/event_store.py"), "hooks"), (str(root / "hooks/runtime.py"), "hooks"),
+        (str(root / "hooks/claude_engine.ts"), "hooks"),
         (str(root / "LICENSE"), ".")]
 data += collect_data_files("webview") + collect_data_files("certifi") + copy_metadata("pywebview")
 

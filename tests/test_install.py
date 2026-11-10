@@ -151,7 +151,7 @@ def test_preserves_users_other_settings_and_hooks(
     cf.write_text(json.dumps({"model": "x", "hooks": {"PostToolUse": [mine], "PreToolUse": [mine]}}))
     run(tmp_path)
     s = json.loads(cf.read_text())
-    assert s["model"] == "x" and s["hooks"]["PreToolUse"] == [mine]
+    assert s["model"] == "x" and s["hooks"]["PreToolUse"][0] == mine
     assert mine in s["hooks"]["PostToolUse"] and len(s["hooks"]["PostToolUse"]) == 2
 
 

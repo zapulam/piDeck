@@ -144,18 +144,17 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     page.reload()
                     tile.locator(".completion-badge").wait_for()
                     assert page.locator("#alert").is_hidden()
-                    tile.click()
-                    tile.locator(".completion-badge").wait_for(state="detached")
+                    tile.locator(".dismiss-agent").click()
+                    tile.wait_for(state="detached")
                     page.reload()
-                    tile.wait_for()
-                    assert tile.locator(".completion-badge").count() == 0
+                    assert tile.count() == 0
                     # Another completed turn in the same session gets a fresh checkmark.
                     client.post("api/agents/event", json={"session_id": "ui-done", "state": "working"})
                     client.post("api/agents/event", json={"session_id": "ui-done", "state": "done"})
                     takeover.wait_for()
                     page.keyboard.press("Escape")
                     tile.locator(".completion-badge").wait_for()
-                    tile.focus()
+                    tile.locator(".dismiss-agent").focus()
                     page.keyboard.press("Enter")
                     tile.locator(".completion-badge").wait_for(state="detached")
                     page.locator("#settings-btn").click()
@@ -176,8 +175,7 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "event": "UsageUpdate", "agent": "cursor", "context_pct": 85})
                     tile = page.locator('[data-id="ui-cursor"]')
                     tile.locator('.context-track[aria-valuenow="85"]').wait_for()
-                    assert "Before compact" in tile.inner_text()
-                    assert "85%" not in tile.inner_text()
+                    assert "Context 85%" in tile.inner_text()
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "event": "PostToolUse", "agent": "cursor", "context_pct": None})
                     page.wait_for_function('() => document.querySelector(\'[data-id="ui-cursor"] .context-label\')?.textContent === "Context unavailable"')
                     client.post("api/agents/event", json={"session_id": "cursor:aaa111", "state": "done", "name": "piDeck", "agent": "cursor"})
@@ -186,6 +184,14 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     same = page.locator('.agent-group[data-provider="cursor"] .tile[data-name="piDeck"]')
                     tags = same.locator(".tag").all_inner_texts()
                     assert len(tags) == 2 and len(set(tags)) == 2
+                    assert all("#" in tag for tag in tags)
+                    geometry = same.evaluate_all("""els => els.map(el => {
+                        const card = el.getBoundingClientRect();
+                        return ['.name', '.tag', '.meta', '.context-label', '.context-track'].map(selector =>
+                            Math.round(el.querySelector(selector).getBoundingClientRect().top - card.top));
+                    })""")
+                    assert geometry[0] == geometry[1]
+                    assert same.locator('.context-track[data-available="false"]').count() == 2
                     seeds = same.evaluate_all("els => els.map(el => el.dataset.seed)")
                     assert len(set(seeds)) == 2
                     client.post("api/agents/event", json={
@@ -199,7 +205,7 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                         "agent": "claude", "parent_id": "ui-done",
                     })
                     page.locator('[data-id="ui-done:explore"].subagent .subagent-badge').wait_for()
-                    page.locator('[data-id="ui-done:explore"] .tag.subagent-parent', has_text="of notes").wait_for()
+                    page.locator('[data-id="ui-done:explore"] .tag', has_text="of parent").wait_for()
                     connector = page.locator('[data-id="ui-done:explore"].subagent').evaluate(
                         """el => {
                           const style = getComputedStyle(el, '::before');
@@ -330,11 +336,11 @@ def test_completion_queue_and_same_name_sessions_in_chromium(
                     page.wait_for_function('() => document.querySelector("#alert-sprite").dataset.sessionId === "same:222"')
                     page.locator("#alert").wait_for(state="hidden")
                     assert page.locator('.tile[data-name="same"] .completion-badge').count() == 2
-                    # Keyboard acknowledgment affects only the selected session.
+                    # Explicit keyboard dismissal removes only the selected session.
                     first = page.locator('.tile[data-id="same:111"]')
-                    first.focus()
-                    page.keyboard.press("Space")
-                    first.locator(".completion-badge").wait_for(state="detached")
+                    first.locator(".dismiss-agent").focus()
+                    page.keyboard.press("Enter")
+                    first.wait_for(state="detached")
                     assert page.locator('.tile[data-id="same:222"] .completion-badge').count() == 1
                     client.post("api/agents/event", json={"session_id": "same:222", "state": "working"})
                     page.locator('.tile[data-id="same:222"] .completion-badge').wait_for(state="detached")
@@ -647,7 +653,10 @@ def test_compact_usage_focus_and_live_session_updates(
                     mini.click()
                     expect(section).to_have_attribute("data-mode", "agents")
                     expect(page.locator(".session-count")).to_have_text(f"{count + 1} sessions")
-                    assert page.locator('.tile[data-id="focus-test"] .completion-badge').count() == 0
+                    assert page.locator('.tile[data-id="focus-test"] .completion-badge').count() == 1
+                    page.locator('.tile[data-id="focus-test"] .dismiss-agent').click()
+                    expect(page.locator('.tile[data-id="focus-test"]')).to_have_count(0)
+                    expect(page.locator(".session-count")).to_have_text(f"{count} sessions")
                     page.locator('.usage-meter[data-provider="cursor"]').click()
                     expect(section).to_have_attribute("data-mode", "usage")
                     expect(cursor).to_have_attribute("data-selected", "true")

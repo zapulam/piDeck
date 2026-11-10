@@ -41,7 +41,7 @@ h2 small { letter-spacing: 0; text-transform: none; font-weight: 400; }
 #pager-pages { grid-column: 2; display: flex; justify-content: safe center; align-items: center; gap: 10px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 #pager button { position: relative; background: none; border: 0; color: var(--dim); font: 600 12px var(--font); letter-spacing: .12em;
   text-transform: uppercase; padding: 10px 14px; border-radius: 999px; }
-button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
+button, #alert { cursor: pointer; }
 #pager button.on { color: var(--text); background: rgba(255,255,255,.1); }
 #pager #settings-btn { grid-column: 1; width: 36px; height: 36px; padding: 0; display: grid; place-items: center; border-radius: 8px; }
 #pager .badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--waiting);
@@ -164,7 +164,13 @@ button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 10px; align-items: start; }
 .agent-cluster { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .tile { position: relative; background: var(--panel); border: 2px solid var(--line); border-radius: 12px; padding: 12px 8px 10px;
-  display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
+  display: grid; grid-template-rows: 60px 18px 14px 16px 12px 3px; justify-items: center; align-items: center;
+  gap: 6px; overflow: hidden; }
+.tile > * { min-width: 0; max-width: 100%; }
+.tile .context-track[data-available="false"] { opacity: .35; }
+.dismiss-agent { position: absolute; top: 3px; right: 4px; width: 24px; height: 24px; padding: 0;
+  border: 0; background: transparent; color: var(--dim); font: inherit; font-size: 18px; }
+.dismiss-agent:hover, .dismiss-agent:focus-visible { color: var(--text); background: var(--line); border-radius: 4px; }
 .tile.subagent {
   margin-left: 26px;
   overflow: visible;
@@ -323,10 +329,11 @@ button, #alert, .tile[data-unseen="true"] { cursor: pointer; }
   #pager-pages { gap: 2px; }
   #pager button { padding: 10px 8px; font-size: 11px; letter-spacing: .06em; }
 }
+.tile .completion-badge { right: 32px; }
 /* short screens (e.g. 800x480) */
 @container stage (max-height: 520px) {
   h2 { margin-bottom: 8px; }
-  .tile { padding: 8px 6px 7px; gap: 3px; }
+  .tile { padding: 8px 6px 7px; gap: 3px; grid-template-rows: 46px 18px 14px 16px 12px 3px; }
   .tile canvas { width: 46px; height: 46px; }
   .sprite { width: 46px; height: 46px; }
   .clock { font-size: 48px; }

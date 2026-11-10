@@ -9,21 +9,16 @@ const VIEWS = {
 const S = { spotify: null, spotifyAt: 0, slack: [], agents: [], agent_usage: {}, seenSlack: new Set(), unread: new Set(), cfg: { views: Object.keys(VIEWS), alert_seconds: 8, agents_stale_hours: 24 } };
 let frame = 0;
 const motions = new Map();
-const completionSeen = (() => {
+async function acknowledgeSession(id) {
+  const agent = S.agents.find((value) => value.id === id);
+  if (!agent) return;
   try {
-    const saved = JSON.parse(localStorage.getItem("pideck_completion_seen") || "{}");
-    return new Map(Object.entries(saved).filter(([, at]) => Number.isFinite(at)));
-  } catch { return new Map(); }
-})();
-function saveCompletionSeen() {
-  try { localStorage.setItem("pideck_completion_seen", JSON.stringify(Object.fromEntries(completionSeen))); } catch {}
-}
-function acknowledgeSession(id) {
-  const a = S.agents.find((agent) => agent.id === id);
-  if (!a || a.state !== "done") return;
-  completionSeen.set(id, a.state_since);
-  saveCompletionSeen();
-  const sec = $("#v-agents"); if (sec) renderAgents(sec);
+    const response = await fetch("/api/agents/" + encodeURIComponent(id), authInit({ method: "DELETE" }));
+    if (!response.ok) throw new Error("Dismissal failed");
+  } catch {
+    const button = [...document.querySelectorAll("[data-dismiss-agent]")].find((el) => el.dataset.dismissAgent === id);
+    if (button) { button.title = "Could not dismiss. Try again."; button.focus(); }
+  }
 }
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -140,29 +135,27 @@ function sessionTag(id) {
   return raw.slice(-4).toUpperCase();
 }
 function tileHtml(a, peers) {
-  const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
-  const status = a.state === "working" ? "working" : a.state === "waiting" ? "needs you" : a.state;
   const same = peers.filter((b) => b.name === a.name);
+  const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
+  const status = a.activity_label || (a.state === "working" ? "Working" : a.state === "waiting" ? "Needs you" : a.state);
   const parent = a.parent_id && S.agents.find((b) => b.id === a.parent_id);
   const isSub = Boolean(a.parent_id);
-  const bits = [];
-  if (a.detail) bits.push(a.detail);
-  if (same.length > 1) bits.push("#" + sessionTag(a.id));
-  const mark = bits.join(" · ");
+  const bits = ["#" + sessionTag(a.id), isSub ? "of " + (parent?.name || "parent") : "", a.detail];
+  const mark = bits.filter(Boolean).join(" · ");
   const seed = same.length > 1 ? a.id : a.name;
-  const unseen = a.state === "done" && completionSeen.get(a.id) !== a.state_since;
+  const unseen = a.state === "done";
   const parentLabel = parent ? parent.name : (isSub ? "parent" : "");
   return `<div class="tile${isSub ? " subagent" : ""}" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}"${isSub ? ` data-subagent="true" data-parent-id="${esc(a.parent_id)}"` : ""} style="--ctx:${ctx ?? 0}%"
-    ${unseen ? `data-unseen="true" role="button" tabindex="0" aria-label="${esc(a.name)} completed. Mark as seen" title="Click to mark this session as seen"` : ""}>
+    ${unseen ? `data-unseen="true"` : ""}>
     ${unseen ? `<span class="completion-badge" role="img" aria-label="Unseen completion">✓</span>` : ""}
     ${isSub ? `<span class="subagent-badge" title="Subagent of ${esc(parentLabel)}">sub</span>` : ""}
     <div class="sprite"><canvas width="12" height="12"></canvas><span class="thinking" role="img" aria-label="Thinking" hidden><i></i><i></i><i></i></span></div>
     <div class="name" title="${esc(a.name)}">${esc(a.name)}</div>
-    ${isSub ? `<div class="tag subagent-parent">of ${esc(parentLabel)}</div>` : ""}
-    ${mark ? `<div class="tag">${esc(mark)}</div>` : ""}
+    <div class="tag" title="${esc(mark)}">${esc(mark)}</div>
     <div class="meta"><b>${status}</b></div>
-    <div class="context-label">${a.agent === "cursor" && ctx != null ? "Before compact" : "Context"}${ctx == null ? " unavailable" : ""}</div>
-    ${ctx == null ? "" : `<div class="context-track" role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"><div></div></div>`}
+    <div class="context-label">Context ${ctx == null ? "unavailable" : ctx + "%"}</div>
+    <div class="context-track" data-available="${ctx != null}" ${ctx == null ? `role="img" aria-label="${esc(a.name)} context unavailable"` : `role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"`}><div></div></div>
+    <button class="dismiss-agent" data-dismiss-agent="${esc(a.id)}" aria-label="Dismiss ${esc(a.name)}" title="Hide this card. Does not stop the task.">×</button>
   </div>`;
 }
 function usageDuration(minutes) {
@@ -202,6 +195,8 @@ function usageBar(window, name) {
 }
 function usageNoteLabel(note) {
   if (!note) return "Usage unavailable";
+  if (note === "unsupported") return "Personal allowances are not exposed by Cursor";
+  if (note === "codex_unavailable") return "Codex account usage unavailable";
   if (note.startsWith("http_")) return "Provider returned " + note.slice(5);
   if (note === "missing_file" || note === "no_sign_in") return "Sign-in not found";
   if (note.startsWith("token_") || note === "unreadable" || note === "bad_json") return "Sign-in unreadable";
@@ -244,7 +239,7 @@ function miniAgents(list) {
     if (!items.length) return "";
     return `<div class="mini-group">${providerLogo(kind)}${items.map((a) => {
       const same = items.filter((other) => other.name === a.name);
-      const unseen = a.state === "done" && completionSeen.get(a.id) !== a.state_since;
+      const unseen = a.state === "done";
       const isSub = Boolean(a.parent_id);
       const parent = isSub && S.agents.find((b) => b.id === a.parent_id);
       const title = isSub ? `${a.name} · sub of ${parent?.name || "parent"} · ${a.state}` : `${a.name} · ${a.state}`;
@@ -581,10 +576,6 @@ function onState(key, value) {
     if (key === "agents") {
       const ids = new Set(value.map((a) => a.id));
       for (const id of motions.keys()) if (!ids.has(id)) motions.delete(id);
-      for (const id of completionSeen.keys()) {
-        if (!value.some((a) => a.id === id && a.state === "done")) completionSeen.delete(id);
-      }
-      saveCompletionSeen();
     }
   }
   renderAll();
@@ -686,8 +677,7 @@ document.addEventListener("click", async (e) => {
   }
   const mini = e.target.closest("[data-open-agent]");
   if (mini) {
-    const id = mini.dataset.openAgent, agent = S.agents.find((a) => a.id === id);
-    if (agent?.state === "done") { completionSeen.set(id, agent.state_since); saveCompletionSeen(); }
+    const id = mini.dataset.openAgent;
     agentView = "agents";
     renderAgents($("#v-agents"));
     [...document.querySelectorAll(".tile")].find((el) => el.dataset.id === id)?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -699,8 +689,8 @@ document.addEventListener("click", async (e) => {
   if (e.target.closest("[data-reset-layout]")) {
     layout.groups = [...GROUPS]; layout.dock = "right"; saveLayout(); renderAll(); return;
   }
-  const tile = e.target.closest('.tile[data-unseen="true"]');
-  if (tile) return acknowledgeSession(tile.dataset.id);
+  const dismiss = e.target.closest("[data-dismiss-agent]");
+  if (dismiss) return acknowledgeSession(dismiss.dataset.dismissAgent);
   if (e.target.closest("#alert")) return hideAlert();
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act) {
@@ -741,10 +731,6 @@ document.addEventListener("keydown", (e) => {
     const edge = { ArrowUp: "top", ArrowDown: "bottom", ArrowLeft: "left", ArrowRight: "right" }[e.key];
     if (edge) { layout.dock = edge; saveLayout(); renderAll(); $(".usage-grab")?.focus(); }
     return;
-  }
-  const tile = e.target.closest('.tile[data-unseen="true"]');
-  if (tile && (e.key === "Enter" || e.key === " ")) {
-    e.preventDefault(); acknowledgeSession(tile.dataset.id); return;
   }
   const t = $("#track");
   if (e.key === "ArrowRight") t.scrollBy({ left: t.clientWidth, behavior: "smooth" });

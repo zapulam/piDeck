@@ -51,9 +51,9 @@ def test_lifecycle_and_alerts(
         assert ws.receive_json()["type"] == "snapshot"
 
         post(client, session_id="s1", event="SessionStart", cwd="/home/me/api-gateway")
-        assert ws.receive_json()["value"][0]["state"] == "idle"
+        assert client.app.state.agents.agents == {}
 
-        post(client, session_id="s1", event="UserPromptSubmit")
+        post(client, session_id="s1", event="UserPromptSubmit", cwd="/home/me/api-gateway")
         a = ws.receive_json()["value"][0]
         assert (a["state"], a["name"]) == ("working", "api-gateway")
 
@@ -72,6 +72,8 @@ def test_lifecycle_and_alerts(
         assert alert["session_id"] == "s1"
 
         post(client, session_id="s1", event="SessionEnd")
+        assert ws.receive_json()["value"][0]["state"] == "done"
+        assert client.delete("/api/agents/s1").status_code == 200
         assert ws.receive_json()["value"] == []
 
 
