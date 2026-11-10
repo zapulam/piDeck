@@ -125,7 +125,13 @@ def command_for(
     executable = Path(sys.executable)
     if getattr(sys, "frozen", False):
         executable = executable.with_name("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
-    cmd = f'"{executable}" "{script}"'
+    if source == "codex" and sys.platform == "win32":
+        # Codex runs hooks through PowerShell on Windows. Quoted paths need
+        # its invocation operator; literal quotes also preserve $ and apostrophes.
+        program, target = ("'" + str(value).replace("'", "''") + "'" for value in (executable, script))
+        cmd = f"& {program} {target}"
+    else:
+        cmd = f'"{executable}" "{script}"'
     return cmd + (f" --source {source}" if source != "claude" else "")
 
 
