@@ -147,6 +147,7 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     tile.locator(".dismiss-agent").click()
                     tile.wait_for(state="detached")
                     page.reload()
+                    page.wait_for_function("() => S.initialized === true")
                     assert tile.count() == 0
                     # Another completed turn in the same session gets a fresh checkmark.
                     client.post("api/agents/event", json={"session_id": "ui-done", "state": "working"})
