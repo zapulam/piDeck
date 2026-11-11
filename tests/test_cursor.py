@@ -221,6 +221,7 @@ def test_cursor_ignores_unrelated_hooks_and_invalid_context() -> None:
 def test_cursor_returns_valid_hook_json_when_display_is_offline(
     event: Any,
     expected: Any,
+    tmp_path: Path,
     ) -> None:
     """
     An unavailable piDeck must not turn the prompt hook into a blocking invalid response.
@@ -228,6 +229,7 @@ def test_cursor_returns_valid_hook_json_when_display_is_offline(
     Args:
         event (Any): Provider event name or event fields to handle.
         expected (Any): Expected normalized value or response fields for this test case.
+        tmp_path (Path): Isolated hook configuration and metadata directory.
 
     Returns:
         None: Assertions or fixture setup completed successfully.
@@ -236,7 +238,9 @@ def test_cursor_returns_valid_hook_json_when_display_is_offline(
     result = subprocess.run([sys.executable, str(script), "--source", "cursor"],
                             input=json.dumps({"hook_event_name": event, "conversation_id": "c"}),
                             text=True, capture_output=True, timeout=5,
-                            env={**os.environ, "PIDECK_URL": "http://127.0.0.1:1"})
+                            env={**os.environ, "PIDECK_URL": "http://127.0.0.1:1",
+                                 "PIDECK_CONFIG": str(tmp_path / "hook.json"),
+                                 "CURSOR_STATE_DB": str(tmp_path / "missing.vscdb")})
     assert result.returncode == 0 and result.stderr == ""
     assert json.loads(result.stdout) == expected
 

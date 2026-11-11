@@ -75,6 +75,7 @@ class AgentEvent(BaseModel):
     note: Optional[str] = Field(None, max_length=40)       # why account usage is unavailable
     message: Optional[str] = Field(None, max_length=500)
     parent_id: Optional[str] = Field(None, max_length=128)  # set when this tile is a subagent
+    provider_session_id: Optional[str] = Field(None, max_length=128)
     # Provider observation time, retained across offline replay.
     activity_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     event_id: Optional[str] = Field(None, max_length=64)
@@ -113,7 +114,7 @@ class AgentRegistry:
         self.cfg = cfg
         self.alert_seconds = alert_seconds
         self.agents: dict[str, dict] = {}
-        self.tools: dict[str, set[str]] = {}
+        self.tools: dict[str, dict[str, str]] = {}
         self.jobs: dict[str, set[str]] = {}
         self.seen: OrderedDict[str, None] = OrderedDict()
         self.state_path = state_path
@@ -183,7 +184,7 @@ class AgentRegistry:
             return cur
         if cur is None and measurement:
             return None
-        tools = self.tools.setdefault(ev.session_id, set())
+        tools = self.tools.setdefault(ev.session_id, {})
         jobs = self.jobs.setdefault(ev.session_id, set())
         if ev.event == "UserPromptSubmit":
             tools.clear()
@@ -192,9 +193,9 @@ class AgentRegistry:
             jobs.update(ev.background_tasks)
         if ev.tool_use_id:
             if ev.event == "PreToolUse":
-                tools.add(ev.tool_use_id)
+                tools[ev.tool_use_id] = ev.tool_name or ""
             elif ev.event in {"PostToolUse", "PostToolUseFailure"}:
-                tools.discard(ev.tool_use_id)
+                tools.pop(ev.tool_use_id, None)
         ended = (cur or {}).get("turn_ended", False)
         if ev.event in {"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure"}:
             ended = False
@@ -209,7 +210,19 @@ class AgentRegistry:
         prev_state = (cur or {}).get("state")
         name = ev.name or (cur or {}).get("name") or _name_from_cwd(ev.cwd) or ev.session_id[:8]
         kind = ev.agent if ev.agent in KINDS else (cur or {}).get("agent", "claude")
-        label = "Running command" if tools else "Background work" if jobs else "Working"
+        names = {name.lower() for name in tools.values()}
+        label = "Working"
+        if tools:
+            if names & {"bash", "shell", "powershell", "exec_command"}:
+                label = "Running command"
+            elif names & {"task", "agent", "collaborationspawn_agent", "spawn_agent"}:
+                label = "Running subagents"
+            elif names & {"collaborationwait_agent", "wait_agent"}:
+                label = "Waiting for subagents"
+            else:
+                label = "Using tool"
+        elif jobs:
+            label = "Background work"
         if state == "waiting":
             label = "Needs you"
         elif state == "done":
@@ -225,6 +238,7 @@ class AgentRegistry:
             "id": ev.session_id, "name": name, "agent": kind, "state": state,
             "detail": ev.detail or (cur or {}).get("detail"),
             "parent_id": ev.parent_id or (cur or {}).get("parent_id"),
+            "provider_session_id": ev.provider_session_id or (cur or {}).get("provider_session_id"),
             "cwd": ev.cwd or (cur or {}).get("cwd"),
             "context_pct": ev.context_pct if "context_pct" in ev.model_fields_set else (cur or {}).get("context_pct"),
             "message": ev.message, "updated_at": observed, "activity_at": activity,
@@ -232,10 +246,16 @@ class AgentRegistry:
             "turn_id": ev.turn_id or (cur or {}).get("turn_id"),
             "turn_ended": ended, "activity_label": label,
             "running_tool_count": len(tools), "background_count": len(jobs),
+            "active_tools": sorted(set(name for name in tools.values() if name)),
             "restored": ev.replay if not measurement else cur.get("restored", False),
             "context_at": observed if "context_pct" in ev.model_fields_set else (cur or {}).get("context_at", 0),
         }
         self.agents[ev.session_id] = agent
+        if state == "done":
+            for child in self.agents.values():
+                if child.get("parent_id") == ev.session_id and child["state"] == "working" and not self.tools.get(child["id"]) and not self.jobs.get(child["id"]):
+                    child["state"] = "unknown"
+                    child["activity_label"] = "Status unknown"
         while len(self.agents) > MAX_SESSIONS:
             oldest = min(self.agents, key=lambda key: self.agents[key]["activity_at"])
             self.agents.pop(oldest)
@@ -243,7 +263,7 @@ class AgentRegistry:
             self.jobs.pop(oldest, None)
         await self._publish()
         await self._update_usage(ev, observed)
-        if not ev.replay and state != prev_state and state in self.cfg.get("alert_on", []):
+        if not ev.replay and (state != "done" or not agent["parent_id"]) and state != prev_state and state in self.cfg.get("alert_on", []):
             if state == "done" and prev_state in (None, "idle"):
                 return agent
             title = f"{name} finished" if state == "done" else f"{name} needs you"
@@ -272,23 +292,36 @@ class AgentRegistry:
     async def dismiss(
         self,
         session_id: str,
+        only_if_finished: bool = False,
         ) -> None:
         """
-        Hide a card without stopping provider work and prevent older offline replay from restoring it.
+        Hide a card and its descendants without stopping work or allowing older replay to restore them.
 
         Args:
-            session_id (str): Session explicitly dismissed by the person or a verified read receipt.
+            session_id (str): Root of the family dismissed by the person or a verified read receipt.
+            only_if_finished (bool): Keep a read-acknowledged family visible while any worker
+                still has active or uncertain work. Manual dismissal leaves this False.
 
         Returns:
             None: The local card is removed; later real provider activity can recreate it.
         """
-        self.dismissed[session_id] = time.time()
+        hidden = {session_id}
+        while True:
+            descendants = {sid for sid, agent in self.agents.items() if agent.get("parent_id") in hidden}
+            if descendants <= hidden:
+                break
+            hidden.update(descendants)
+        if only_if_finished and any(self.agents[sid]["state"] not in {"done", "idle", "error"}
+                                    for sid in hidden if sid in self.agents):
+            return
+        for sid in hidden:
+            self.dismissed[sid] = time.time()
+            self.agents.pop(sid, None)
+            self.tools.pop(sid, None)
+            self.jobs.pop(sid, None)
         self.dismissed = dict(sorted(self.dismissed.items(), key=lambda pair: pair[1])[-1000:])
         if self.state_path is not None:
             private_write(self.state_path, json.dumps(self.dismissed) + "\n")
-        self.agents.pop(session_id, None)
-        self.tools.pop(session_id, None)
-        self.jobs.pop(session_id, None)
         await self._publish()
 
     async def _update_usage(

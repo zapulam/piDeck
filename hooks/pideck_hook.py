@@ -38,6 +38,7 @@ import csv
 import io
 import ipaddress
 import math
+import hashlib
 import os
 import re
 import subprocess
@@ -425,20 +426,27 @@ def build_event(
     if env.get("PIDECK_NAME"):
         ev["name"] = env["PIDECK_NAME"]
     hook_name = payload.get("hook_event_name")
-    if hook_name in ("SubagentStart", "SubagentStop") and payload.get("agent_id"):
+    if payload.get("agent_id"):
         parent = payload.get("session_id") or "unknown"
         ev["parent_id"] = str(parent)[:128]
-        ev["session_id"] = (str(parent) + ":" + _token(payload["agent_id"]))[:128]
-        ev["event"] = "Stop" if hook_name == "SubagentStop" else "UserPromptSubmit"
+        ev["session_id"] = child_session_id(str(parent) + ":", payload["agent_id"])
+        if hook_name in ("SubagentStart", "SubagentStop"):
+            ev["event"] = "Stop" if hook_name == "SubagentStop" else "UserPromptSubmit"
         if payload.get("agent_type"):
             ev["name"] = str(payload["agent_type"]).strip()[:64]
     # Notification carries `message`; Codex's Stop carries `last_assistant_message`
     msg = (payload.get("message") or payload.get("last_assistant_message")) if wants_messages(env) else None
     if msg:
         ev["message"] = " ".join(str(msg).split())[:200]
-    if source == "codex" and ev["event"] != "SessionEnd":
+    if source == "codex" and ev["event"] != "SessionEnd" and not ev.get("parent_id"):
         ev.update(codex_metrics(payload, env))
     ev.update(lifecycle_fields(payload))
+    if ev.get("parent_id"):
+        # Claude's child hooks carry the session-wide background list, including
+        # the child itself and its siblings. It is not a list of this child's jobs.
+        ev.pop("background_tasks", None)
+        if hook_name == "SubagentStop":
+            ev["background_tasks"] = []
     return ev
 
 
@@ -489,27 +497,53 @@ def _token(
 
 def cursor_subagent_ids(
     payload: dict[str, Any],
+    env: Mapping[str, str],
     ) -> tuple[str | None, str | None]:
     """
     Session and parent ids for a Cursor subagent, without its task text.
 
     Args:
         payload (dict[str, Any]): subagentStart or subagentStop input.
+        env (Mapping[str, str]): Environment selecting local provider metadata.
 
     Returns:
         tuple[str | None, str | None]: (session_id, parent_id). Either is None when the payload has
             no identity.
     """
+    try:
+        from .runtime import cursor_child_identity
+    except ImportError:
+        from runtime import cursor_child_identity
+    identity = cursor_child_identity(str(payload.get("conversation_id") or ""), env)
+    if identity:
+        parent, sub = identity
+        return child_session_id("cursor:sub:", sub), ("cursor:" + parent)[:128]
     parent = payload.get("parent_conversation_id") or payload.get("conversation_id")
     sub = payload.get("subagent_id") or payload.get("tool_call_id")
     if not sub and payload.get("agent_transcript_path"):
         sub = Path(str(payload["agent_transcript_path"])).stem
-    if not sub and parent and payload.get("subagent_type"):
-        sub = _token(parent, 40) + ":" + _token(payload.get("subagent_type"), 24)
     if not sub:
         return None, None
     parent_id = ("cursor:" + _token(parent, 80))[:128] if parent else None
-    return ("cursor:sub:" + _token(sub, 80))[:128], parent_id
+    return child_session_id("cursor:sub:", sub), parent_id
+
+
+def child_session_id(
+    prefix: str,
+    identity: Any,
+    ) -> str:
+    """
+    Build a bounded child ID without dropping distinguishing suffixes of long identities.
+
+    Args:
+        prefix (str): Parent namespace or provider-specific child prefix.
+        identity (Any): Provider-reported stable child or spawning tool identity.
+
+    Returns:
+        str: Original compact identity, or a deterministic SHA-256 identity within 128 characters.
+    """
+    value = prefix + _token(identity, 4096)
+    return value if len(value) <= 128 else prefix[:50] + hashlib.sha256(value.encode()).hexdigest()
 
 
 def cursor_hook_response(
@@ -596,7 +630,9 @@ def build_cursor_event(
     """
     hook_name = payload.get("hook_event_name")
     event = CURSOR_EVENTS.get(hook_name)
-    sub_session, parent_id = cursor_subagent_ids(payload) if hook_name in ("subagentStart", "subagentStop") else (None, None)
+    sub_session, parent_id = cursor_subagent_ids(payload, env)
+    if hook_name in ("subagentStart", "subagentStop") and not sub_session:
+        return None  # Missing identity cannot safely start or finish a particular child.
     sid = payload.get("conversation_id") or payload.get("session_id") or (sub_session or "").removeprefix("cursor:")
     if event is None or not (sid or sub_session):
         return None
@@ -609,6 +645,8 @@ def build_cursor_event(
     }
     if parent_id:
         ev["parent_id"] = parent_id
+    if sub_session and parent_id != "cursor:" + str(sid):
+        ev["provider_session_id"] = str(sid)[:128]
     if hook_name in ("subagentStart", "subagentStop") and payload.get("subagent_type"):
         ev["name"] = str(payload["subagent_type"]).strip()[:64]
     title = display_title(payload.get("summary"), payload.get("title"))
@@ -632,7 +670,7 @@ def build_cursor_event(
     elif payload.get("hook_event_name") == "postToolUseFailure" and payload.get("failure_type") == "permission_denied":
         ev["state"] = "waiting"
     ev.update(lifecycle_fields(payload))
-    if event != "SessionEnd":
+    if event != "SessionEnd" and (not sub_session or ev.get("provider_session_id")):
         try:
             from .runtime import cursor_metrics
         except ImportError:

@@ -41,7 +41,7 @@ MARK = "pideck_hook.py"  # how we recognise our own hook entries
 
 CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
                  "PermissionRequest", "Notification", "Stop", "StopFailure", "SubagentStart", "SubagentStop", "SessionEnd"]
-CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "Interrupt", "SessionEnd"]
+CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "Interrupt", "SubagentStart", "SubagentStop", "SessionEnd"]
 CURSOR_EVENTS = ["sessionStart", "beforeSubmitPrompt", "preToolUse", "postToolUse", "postToolUseFailure", "stop", "subagentStart", "subagentStop", "sessionEnd"]
 
 
@@ -125,8 +125,8 @@ def command_for(
     executable = Path(sys.executable)
     if getattr(sys, "frozen", False):
         executable = executable.with_name("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
-    if source == "codex" and sys.platform == "win32":
-        # Codex runs hooks through PowerShell on Windows. Quoted paths need
+    if source in {"codex", "cursor"} and sys.platform == "win32":
+        # Codex and Cursor run hooks through PowerShell on Windows. Quoted paths need
         # its invocation operator; literal quotes also preserve $ and apostrophes.
         program, target = ("'" + str(value).replace("'", "''") + "'" for value in (executable, script))
         cmd = f"& {program} {target}"

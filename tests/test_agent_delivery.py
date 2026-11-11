@@ -42,7 +42,7 @@ def test_response_end_waits_for_background_and_close_is_not_completion(
     client.post("/api/agents/event", json={**base, "event": "UserPromptSubmit"})
     response = client.post("/api/agents/event", json={**base, "event": "SessionStart"}).json()["agent"]
     assert response["state"] == "working"
-    running = client.post("/api/agents/event", json={**base, "event": "PreToolUse", "tool_use_id": "t"}).json()["agent"]
+    running = client.post("/api/agents/event", json={**base, "event": "PreToolUse", "tool_use_id": "t", "tool_name": "Bash"}).json()["agent"]
     assert running["activity_label"] == "Running command"
     client.post("/api/agents/event", json={**base, "event": "PostToolUse", "tool_use_id": "t"})
     response = client.post("/api/agents/event", json={**base, "event": "Stop", "background_tasks": ["job"]}).json()["agent"]
@@ -265,3 +265,202 @@ def test_cursor_background_waits_for_structured_exit_footer(
     assert cursor_metrics("s", env)["background_tasks"] == ["123"]
     other.unlink()
     assert cursor_metrics("s", env) == {"context_pct": 42, "background_tasks": []}
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex", "cursor"])
+def test_children_keep_tool_identity_separate_from_parent(
+    client: TestClient,
+    provider: str,
+    ) -> None:
+    """
+    Route two same-type workers and their concurrent tools without changing the parent.
+
+    Args:
+        client (TestClient): Isolated authenticated application client.
+        provider (str): Provider whose documented identity fields are exercised.
+
+    Returns:
+        None: Child tools, failures, and completion remain isolated by stable identity.
+    """
+    from hooks.pideck_hook import build_event
+
+    parent = "cursor:parent" if provider == "cursor" else "parent"
+    client.post("/api/agents/event", json={"session_id": parent, "event": "UserPromptSubmit", "agent": provider})
+    for child in ("one", "two"):
+        base = ({"conversation_id": "parent", "parent_conversation_id": "parent", "subagent_id": child}
+                if provider == "cursor" else {"session_id": "parent", "agent_id": child})
+        start = "subagentStart" if provider == "cursor" else "SubagentStart"
+        payload = {**base, "hook_event_name": start, "agent_type": "worker", "subagent_type": "worker"}
+        event = build_event(payload, {}, provider)
+        client.post("/api/agents/event", json=event)
+        tool = build_event({**base, "hook_event_name": "preToolUse" if provider == "cursor" else "PreToolUse",
+                            "tool_name": "Shell" if provider == "cursor" else "Bash", "tool_use_id": child,
+                            "tool_input": {"command": "private command"}}, {}, provider)
+        running = client.post("/api/agents/event", json=tool).json()["agent"]
+        assert running["parent_id"] == parent and running["running_tool_count"] == 1
+        assert running["activity_label"] == "Running command"
+        assert "private" not in json.dumps(running)
+    registry = client.app.state.agents
+    assert registry.agents[parent]["running_tool_count"] == 0
+    assert len(registry.agents) == 3
+    one = "cursor:sub:one" if provider == "cursor" else "parent:one"
+    two = "cursor:sub:two" if provider == "cursor" else "parent:two"
+    client.post("/api/agents/event", json={"session_id": one, "event": "PostToolUseFailure", "tool_use_id": "one"})
+    assert registry.agents[one]["running_tool_count"] == 0
+    assert registry.agents[two]["running_tool_count"] == 1
+    client.post("/api/agents/event", json={"session_id": one, "event": "Stop"})
+    assert registry.agents[parent]["state"] == "working"
+    assert registry.agents[two]["state"] == "working"
+
+
+def test_tools_are_not_all_shell_commands(
+    client: TestClient,
+    ) -> None:
+    """
+    Distinguish generic tools from command execution and retain concurrent tool names.
+
+    Args:
+        client (TestClient): Isolated authenticated application client.
+
+    Returns:
+        None: Finishing one command preserves other work and clears its command label.
+    """
+    base = {"session_id": "tools", "event": "PreToolUse"}
+    read = client.post("/api/agents/event", json={**base, "tool_use_id": "read", "tool_name": "Read"}).json()["agent"]
+    assert read["activity_label"] == "Using tool" and read["active_tools"] == ["Read"]
+    shell = client.post("/api/agents/event", json={**base, "tool_use_id": "shell", "tool_name": "Bash"}).json()["agent"]
+    assert shell["activity_label"] == "Running command" and shell["running_tool_count"] == 2
+    after = client.post("/api/agents/event", json={"session_id": "tools", "event": "PostToolUse", "tool_use_id": "shell"}).json()["agent"]
+    assert after["activity_label"] == "Using tool" and after["active_tools"] == ["Read"]
+
+
+def test_cursor_missing_child_identity_never_finishes_parent() -> None:
+    """
+    Reject ambiguous child events instead of guessing identity from a shared type.
+
+    Returns:
+        None: Neither starts nor stops without stable child IDs become parent activity.
+    """
+    from hooks.pideck_hook import build_event
+
+    for event in ("subagentStart", "subagentStop"):
+        assert build_event({"hook_event_name": event, "conversation_id": "parent",
+                            "subagent_type": "worker"}, {}, "cursor") is None
+
+
+def test_cursor_provider_metadata_links_real_child_conversations(
+    tmp_path: Path,
+    client: TestClient,
+    ) -> None:
+    """
+    Match Cursor's live subagentInfo schema to lifecycle IDs without reading task content.
+
+    Args:
+        tmp_path (Path): Isolated provider database directory.
+        client (TestClient): Isolated authenticated application client.
+
+    Returns:
+        None: Two workers with long shared ID prefixes retain independent tools and completion.
+    """
+    from hooks.pideck_hook import build_event
+    from hooks.runtime import cursor_child_identity
+
+    db = tmp_path / "state.vscdb"
+    env = {"CURSOR_STATE_DB": str(db)}
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        for child in ("one", "two"):
+            tool = "x" * 150 + child
+            connection.execute("INSERT INTO cursorDiskKV VALUES (?, ?)", ("composerData:" + child,
+                json.dumps({"subagentInfo": {"parentComposerId": "parent", "toolCallId": tool},
+                            "private": "must not forward"})))
+    identities = []
+    for child in ("one", "two"):
+        start = build_event({"hook_event_name": "subagentStart", "conversation_id": "parent",
+                             "parent_conversation_id": "parent", "tool_call_id": "x" * 150 + child}, env, "cursor")
+        client.post("/api/agents/event", json=start)
+        tool = build_event({"hook_event_name": "preToolUse", "conversation_id": child,
+                            "tool_name": "Shell", "tool_use_id": child}, env, "cursor")
+        assert tool["session_id"] == start["session_id"]
+        assert tool["parent_id"] == "cursor:parent" and tool["provider_session_id"] == child
+        identities.append(tool["session_id"])
+        client.post("/api/agents/event", json=tool)
+        stop = build_event({"hook_event_name": "stop", "conversation_id": child,
+                            "status": "completed", "background_tasks": []}, env, "cursor")
+        done = client.post("/api/agents/event", json=stop).json()["agent"]
+        assert done["state"] == "done" and done["running_tool_count"] == 0
+        assert "private" not in json.dumps(done)
+    assert len(set(identities)) == 2 and all(len(value) <= 128 for value in identities)
+    assert cursor_child_identity("missing", env) is None
+    with sqlite3.connect(db) as connection:
+        connection.execute("INSERT INTO cursorDiskKV VALUES (?, ?)", ("composerData:bad", "[]"))
+    assert cursor_child_identity("bad", env) is None
+
+
+def test_parent_completion_does_not_invent_child_completion(
+    client: TestClient,
+    ) -> None:
+    """
+    Keep uncertain children dismissible and hide a family's cards together when acknowledged.
+
+    Args:
+        client (TestClient): Isolated authenticated application client.
+
+    Returns:
+        None: Parent completion never fabricates a child's result or leaves dismissed orphans.
+    """
+    for sid, parent in (("p", None), ("c", "p"), ("g", "c")):
+        client.post("/api/agents/event", json={"session_id": sid, "parent_id": parent, "event": "UserPromptSubmit"})
+    client.post("/api/agents/event", json={"session_id": "p", "event": "Stop"})
+    registry = client.app.state.agents
+    assert registry.agents["c"]["state"] == "unknown"
+    assert registry.agents["c"]["activity_label"] == "Status unknown"
+    asyncio.run(registry.dismiss("p", only_if_finished=True))
+    assert set(registry.agents) == {"p", "c", "g"}
+    client.delete("/api/agents/p")
+    assert not registry.agents
+    assert {"p", "c", "g"} <= registry.dismissed.keys()
+
+
+def test_claude_child_completion_ignores_session_background_list() -> None:
+    """
+    Finish a child even when Claude reports that child and siblings in the session-wide job list.
+
+    Returns:
+        None: Session jobs do not leak into the child's command or completion state.
+    """
+    from hooks.pideck_hook import build_event
+
+    base = {"session_id": "parent", "agent_id": "child", "background_tasks": [{"id": "child"}, {"id": "sibling"}]}
+    pre = build_event({**base, "hook_event_name": "PreToolUse", "tool_name": "PowerShell", "tool_use_id": "t"}, {}, "claude")
+    assert "background_tasks" not in pre
+    stop = build_event({**base, "hook_event_name": "SubagentStop"}, {}, "claude")
+    assert stop["session_id"] == "parent:child" and stop["background_tasks"] == []
+
+
+def test_child_attention_alerts_but_completion_stays_in_drawer(
+    client: TestClient,
+    ) -> None:
+    """
+    Retain child approval alerts without giving every child a full-screen completion takeover.
+
+    Args:
+        client (TestClient): Isolated authenticated application client.
+
+    Returns:
+        None: Child attention identifies the worker and child completion emits only state.
+    """
+    with client.websocket_connect("wss://testserver/ws") as ws:
+        ws.receive_json()
+        client.post("/api/agents/event", json={"session_id": "parent", "event": "UserPromptSubmit"})
+        ws.receive_json()
+        base = {"session_id": "child", "parent_id": "parent"}
+        client.post("/api/agents/event", json={**base, "event": "UserPromptSubmit"})
+        ws.receive_json()
+        client.post("/api/agents/event", json={**base, "event": "PermissionRequest"})
+        assert ws.receive_json()["type"] == "state"
+        assert ws.receive_json()["alert"]["session_id"] == "child"
+        client.post("/api/agents/event", json={**base, "event": "Stop"})
+        assert ws.receive_json()["type"] == "state"
+        client.post("/api/agents/event", json={"session_id": "parent", "event": "PostToolUse"})
+        assert ws.receive_json()["type"] == "state"

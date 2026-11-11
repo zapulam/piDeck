@@ -103,7 +103,7 @@ async def monitor(
             for current in list(agents.agents.values()):
                 sid = current["id"]
                 if current["agent"] == "cursor" and current["state"] in {"working", "waiting"}:
-                    metrics = await asyncio.to_thread(cursor_metrics, sid.removeprefix("cursor:"), os.environ)
+                    metrics = await asyncio.to_thread(cursor_metrics, current.get("provider_session_id") or sid.removeprefix("cursor:"), os.environ)
                     if metrics and metrics != cursor_values.get(sid):
                         cursor_values[sid] = metrics
                         if "context_pct" in metrics:
@@ -114,7 +114,7 @@ async def monitor(
                                                            background_tasks=metrics["background_tasks"]))
                 elif current["agent"] == "codex" and current["state"] == "done":
                     if await asyncio.to_thread(codex_viewed, sid, current.get("turn_id") or "", Path.home()):
-                        await agents.dismiss(sid)
+                        await agents.dismiss(sid, only_if_finished=True)
             await asyncio.sleep(1)
     finally:
         usage_task.cancel()

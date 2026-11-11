@@ -108,15 +108,18 @@ def test_codex_hooks_use_source_flag_and_fewer_events(
     assert all(h["command"].endswith("--source codex") for h in ours(s))
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Codex uses PowerShell for Windows hooks")
-def test_codex_windows_launcher_preserves_literal_paths_and_stdin(
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows providers use PowerShell hooks")
+@pytest.mark.parametrize("source", ["codex", "cursor"])
+def test_windows_launcher_preserves_literal_paths_and_stdin(
     tmp_path: Path,
+    source: str,
     ) -> None:
     """
     Run the generated hook through real PowerShell with spaces, apostrophes, and dollar signs.
 
     Args:
         tmp_path (Path): Directory containing an isolated hook receiving public test metadata.
+        source (str): Provider whose Windows hook invocation is being exercised.
 
     Returns:
         None: The executable launches and receives the original arguments and standard input.
@@ -129,10 +132,10 @@ def test_codex_windows_launcher_preserves_literal_paths_and_stdin(
                       encoding="utf-8")
     body = {"session_id": "launch-check", "hook_event_name": "PreToolUse"}
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                             install.command_for(script, "codex")],
+                             install.command_for(script, source)],
                             input=json.dumps(body), text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"args": ["--source", "codex"], "input": body}
+    assert json.loads(result.stdout) == {"args": ["--source", source], "input": body}
 
 
 def test_idempotent_and_single_backup(

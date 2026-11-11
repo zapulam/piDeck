@@ -18,6 +18,43 @@ from typing import Any, Mapping
 # --- Cursor context and background terminals ---
 
 
+def cursor_child_identity(
+    session_id: str,
+    env: Mapping[str, str],
+    ) -> tuple[str, str] | None:
+    """
+    Read the provider-written parent and spawning tool ID for one Cursor child conversation.
+
+    Args:
+        session_id (str): Conversation ID reported by the current hook.
+        env (Mapping[str, str]): Environment selecting Cursor's local state database.
+
+    Returns:
+        tuple[str, str] | None: Parent conversation and spawning tool IDs for the verified
+            subagentInfo schema, or None when identity cannot be established.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
+        return None
+    try:
+        path = cursor_database(env)
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.5)
+        try:
+            row = connection.execute("SELECT value FROM cursorDiskKV WHERE key = ? AND length(value) <= 524288",
+                                     ("composerData:" + session_id,)).fetchone()
+        finally:
+            connection.close()
+        composer = json.loads(row[0]) if row else None
+        info = composer.get("subagentInfo") if isinstance(composer, dict) else None
+        if not isinstance(info, dict):
+            return None
+        parent, tool = info.get("parentComposerId"), info.get("toolCallId")
+        if isinstance(parent, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", parent) and parent != session_id and isinstance(tool, str) and tool.strip():
+            return parent, tool
+    except (OSError, ValueError, TypeError, sqlite3.Error):
+        pass
+    return None
+
+
 def cursor_database(
     env: Mapping[str, str],
     ) -> Path:

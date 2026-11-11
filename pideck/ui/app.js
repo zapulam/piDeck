@@ -134,27 +134,42 @@ function sessionTag(id) {
   const raw = String(id || "").replace(/^[^:]*:/, "").replace(/[^a-z0-9]/gi, "");
   return raw.slice(-4).toUpperCase();
 }
-function tileHtml(a, peers) {
-  const same = peers.filter((b) => b.name === a.name);
-  const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
+const collapsedFamilies = new Set();
+const familyScroll = new Map();
+function activityHtml(a) {
   const status = a.activity_label || (a.state === "working" ? "Working" : a.state === "waiting" ? "Needs you" : a.state);
-  const parent = a.parent_id && S.agents.find((b) => b.id === a.parent_id);
-  const isSub = Boolean(a.parent_id);
-  const bits = ["#" + sessionTag(a.id), isSub ? "of " + (parent?.name || "parent") : "", a.detail];
-  const mark = bits.filter(Boolean).join(" · ");
+  const count = a.running_tool_count || a.background_count || 0;
+  const tools = Array.isArray(a.active_tools) ? a.active_tools : [];
+  return `<b title="${esc(tools.join(", "))}">${esc(status)}${count > 1 ? ` · ${count}` : ""}</b>`;
+}
+function spriteHtml() {
+  return `<div class="sprite"><canvas width="12" height="12"></canvas><span class="thinking" role="img" aria-label="Working" hidden><i></i><i></i><i></i></span><span class="laptop" aria-hidden="true"></span></div>`;
+}
+function childHtml(a, peers, depth = 0) {
+  const seed = peers.filter(b => b.name === a.name).length > 1 ? a.id : a.name;
+  return `<div class="agent-worker" data-id="${esc(a.id)}" data-state="${esc(a.state)}" data-kind="${esc(a.agent || "claude")}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" data-subagent="true" data-parent-id="${esc(a.parent_id)}" style="--depth:${Math.min(depth, 3)}">
+    ${spriteHtml()}<div class="worker-copy"><div class="name" title="${esc(a.name)}">${esc(a.name)}</div><div class="tag">#${sessionTag(a.id)}</div><div class="meta">${activityHtml(a)}</div></div>
+    ${a.state === "done" ? `<span class="worker-done" aria-label="Unseen completion">✓</span>` : ""}
+    <button class="dismiss-agent" data-dismiss-agent="${esc(a.id)}" aria-label="Dismiss ${esc(a.name)}" title="Hide this worker. Does not stop the task.">×</button>
+  </div>`;
+}
+function tileHtml(a, peers, workers = []) {
+  const same = peers.filter(b => b.name === a.name);
+  const ctx = a.context_pct != null ? Math.round(a.context_pct) : null;
+  const mark = ["#" + sessionTag(a.id), a.parent_id ? "Parent unavailable" : "", a.detail].filter(Boolean).join(" · ");
   const seed = same.length > 1 ? a.id : a.name;
-  const unseen = a.state === "done";
-  const parentLabel = parent ? parent.name : (isSub ? "parent" : "");
-  return `<div class="tile${isSub ? " subagent" : ""}" data-id="${esc(a.id)}" data-state="${a.state}" data-kind="${a.agent || "claude"}" data-name="${esc(a.name)}" data-seed="${esc(seed)}"${isSub ? ` data-subagent="true" data-parent-id="${esc(a.parent_id)}"` : ""} style="--ctx:${ctx ?? 0}%"
-    ${unseen ? `data-unseen="true"` : ""}>
-    ${unseen ? `<span class="completion-badge" role="img" aria-label="Unseen completion">✓</span>` : ""}
-    ${isSub ? `<span class="subagent-badge" title="Subagent of ${esc(parentLabel)}">sub</span>` : ""}
-    <div class="sprite"><canvas width="12" height="12"></canvas><span class="thinking" role="img" aria-label="Thinking" hidden><i></i><i></i><i></i></span></div>
-    <div class="name" title="${esc(a.name)}">${esc(a.name)}</div>
-    <div class="tag" title="${esc(mark)}">${esc(mark)}</div>
-    <div class="meta"><b>${status}</b></div>
+  const expanded = !collapsedFamilies.has(a.id);
+  const active = workers.filter(({agent}) => ["working", "waiting"].includes(agent.state)).length;
+  // Encoding the stable session ID keeps aria-controls unique without inserting raw IDs into markup.
+  const drawerId = "workers-" + encodeURIComponent(a.id);
+  return `<div class="tile" data-id="${esc(a.id)}" data-state="${esc(a.state)}" data-kind="${esc(a.agent || "claude")}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%" ${a.state === "done" ? `data-unseen="true"` : ""}>
+    ${a.state === "done" ? `<span class="completion-badge" role="img" aria-label="Unseen completion">✓</span>` : ""}
+    <div class="parent-heading">${spriteHtml()}<div class="parent-copy"><div class="name" title="${esc(a.name)}">${esc(a.name)}</div><div class="tag" title="${esc(mark)}">${esc(mark)}</div></div></div>
+    <div class="meta">${activityHtml(a)}</div>
     <div class="context-label">Context ${ctx == null ? "unavailable" : ctx + "%"}</div>
     <div class="context-track" data-available="${ctx != null}" ${ctx == null ? `role="img" aria-label="${esc(a.name)} context unavailable"` : `role="progressbar" aria-label="${esc(a.name)} context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ctx}"`}><div></div></div>
+    <button class="workers-toggle" data-toggle-workers="${esc(a.id)}" aria-expanded="${expanded}" aria-controls="${drawerId}" ${workers.length ? "" : "disabled"}>${workers.length ? `${expanded ? "▾" : "▸"} ${workers.length} subagent${workers.length === 1 ? "" : "s"} · ${active} active` : "No subagents"}</button>
+    <div class="worker-space"><div class="workers" id="${drawerId}" data-family="${esc(a.id)}" aria-label="Subagents of ${esc(a.name)}" ${expanded ? "" : "hidden"}>${workers.map(({agent, depth}) => childHtml(agent, peers, depth)).join("")}</div></div>
     <button class="dismiss-agent" data-dismiss-agent="${esc(a.id)}" aria-label="Dismiss ${esc(a.name)}" title="Hide this card. Does not stop the task.">×</button>
   </div>`;
 }
@@ -255,6 +270,8 @@ function renderAgents(sec) {
   if ($(".agents-main", sec)) agentScroll.agents = $(".agents-main", sec).scrollTop;
   if ($(".usage-details", sec)) agentScroll.usage = $(".usage-details", sec).scrollTop;
   if ($(".agents-mini", sec)) agentScroll.mini = $(".agents-mini", sec).scrollTop;
+  for (const el of sec.querySelectorAll(".workers")) familyScroll.set(el.dataset.family, el.scrollTop);
+  const focusFamily = document.activeElement?.dataset.toggleWorkers;
   const focused = sec.contains(document.activeElement) ? document.activeElement : null;
   const focusToggle = focused?.matches("[data-agent-view-toggle]");
   const focusMini = focused?.dataset.openAgent;
@@ -279,18 +296,24 @@ function renderAgents(sec) {
       if (!items.length) return "";
       const label = PROVIDERS[kind] || kind;
       const ids = new Set(items.map((a) => a.id));
-      const childrenOf = (id) => items.filter((a) => a.parent_id === id);
-      const roots = items.filter((a) => !a.parent_id || !ids.has(a.parent_id));
+      const childrenOf = (id) => items.filter(a => a.parent_id === id && a.id !== id);
+      const roots = items.filter(a => !a.parent_id || !ids.has(a.parent_id));
       const rendered = new Set();
-      const clusters = roots.map((root) => {
-        const kids = childrenOf(root.id);
+      const clusters = [];
+      // Visit each stable identity once, including malformed cycles and deeper descendants.
+      for (const root of [...roots, ...items]) {
+        if (rendered.has(root.id)) continue;
         rendered.add(root.id);
-        for (const kid of kids) rendered.add(kid.id);
-        if (!kids.length) return tileHtml(root, items);
-        return `<div class="agent-cluster" data-parent-id="${esc(root.id)}">${tileHtml(root, items)}${kids.map((kid) => tileHtml(kid, items)).join("")}</div>`;
-      });
-      for (const leftover of items) {
-        if (!rendered.has(leftover.id)) clusters.push(tileHtml(leftover, items));
+        const workers = [];
+        const visit = (id, depth) => {
+          for (const child of childrenOf(id)) {
+            if (rendered.has(child.id)) continue;
+            rendered.add(child.id); workers.push({agent: child, depth});
+            visit(child.id, depth + 1);
+          }
+        };
+        visit(root.id, 0);
+        clusters.push(tileHtml(root, items, workers));
       }
       return `<div class="agent-group" data-provider="${esc(kind)}"><h3><button type="button" class="group-handle" data-drag-group="${esc(kind)}"
         aria-label="Move ${esc(label)} group" title="Drag to reorder, or use the up and down arrow keys"><span class="drag-grip" aria-hidden="true"></span>${providerLogo(kind)}${esc(label)}</button></h3>
@@ -308,18 +331,20 @@ function renderAgents(sec) {
   }
   if (focusToggle) $("[data-agent-view-toggle]", sec)?.focus({ preventScroll: true });
   if (focusMini) [...sec.querySelectorAll("[data-open-agent]")].find((el) => el.dataset.openAgent === focusMini)?.focus({ preventScroll: true });
+  for (const el of sec.querySelectorAll(".workers")) el.scrollTop = familyScroll.get(el.dataset.family) || 0;
+  if (focusFamily) [...sec.querySelectorAll("[data-toggle-workers]")].find(el => el.dataset.toggleWorkers === focusFamily)?.focus({preventScroll: true});
   animateTiles();
 }
 function animateTiles() {
   const now = performance.now();
-  document.querySelectorAll(".tile, .mini-session").forEach((t) => {
+  document.querySelectorAll(".tile, .agent-worker, .mini-session").forEach((t) => {
     let motion = motions.get(t.dataset.id);
     if (!motion || motion.state !== t.dataset.state) {
       motion = creatureMotion(t.dataset.state, now);
       motions.set(t.dataset.id, motion);
     }
     const pose = stepCreatureMotion(motion, now);
-    const thinking = $(".thinking", t); if (thinking) thinking.hidden = !pose.thinking;
+    const thinking = $(":scope > .sprite .thinking, :scope > .parent-heading .thinking", t); if (thinking) thinking.hidden = !pose.thinking;
     drawCreature($("canvas", t), { state: t.dataset.state, name: t.dataset.name, seed: t.dataset.seed, frame, ...pose });
   });
 }
@@ -675,12 +700,24 @@ document.addEventListener("click", async (e) => {
     $("[data-agent-view-toggle]")?.focus({ preventScroll: true });
     return;
   }
+  const family = e.target.closest("[data-toggle-workers]");
+  if (family) {
+    const id = family.dataset.toggleWorkers;
+    collapsedFamilies.has(id) ? collapsedFamilies.delete(id) : collapsedFamilies.add(id);
+    renderAgents($("#v-agents")); return;
+  }
   const mini = e.target.closest("[data-open-agent]");
   if (mini) {
     const id = mini.dataset.openAgent;
+    let ancestor = S.agents.find(a => a.id === id)?.parent_id;
+    const visited = new Set();
+    while (ancestor && !visited.has(ancestor)) {
+      visited.add(ancestor); collapsedFamilies.delete(ancestor);
+      ancestor = S.agents.find(a => a.id === ancestor)?.parent_id;
+    }
     agentView = "agents";
     renderAgents($("#v-agents"));
-    [...document.querySelectorAll(".tile")].find((el) => el.dataset.id === id)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    [...document.querySelectorAll(".tile, .agent-worker")].find((el) => el.dataset.id === id)?.scrollIntoView({ block: "nearest", inline: "nearest" });
     $("[data-agent-view-toggle]")?.focus({ preventScroll: true });
     return;
   }
