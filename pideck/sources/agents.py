@@ -114,6 +114,7 @@ class AgentRegistry:
         self.cfg = cfg
         self.alert_seconds = alert_seconds
         self.agents: dict[str, dict] = {}
+        self.restoring = False
         self.tools: dict[str, dict[str, str]] = {}
         self.jobs: dict[str, set[str]] = {}
         self.seen: OrderedDict[str, None] = OrderedDict()
@@ -275,32 +276,28 @@ class AgentRegistry:
         self,
         ) -> None:
         """
-        Mark replayed in-flight work unknown until a fresh provider hook confirms its state.
+        Publish one restored snapshot after expiring old history and marking uncertain work.
 
         Returns:
-            None: Old observations remain visible and dismissible without claiming live activity.
+            None: Recent results remain checked; expired history never reaches the display.
         """
-        changed = False
         for agent in self.agents.values():
             if agent.get("restored") and agent["state"] in {"working", "waiting"}:
                 agent["state"] = "unknown"
                 agent["activity_label"] = "Status unknown"
-                changed = True
-        if changed:
-            await self._publish()
+        self._expire(time.time() - float(self.cfg.get("stale_hours", 24)) * 3600)
+        self.restoring = False
+        await self._publish()
 
     async def dismiss(
         self,
         session_id: str,
-        only_if_finished: bool = False,
         ) -> None:
         """
         Hide a card and its descendants without stopping work or allowing older replay to restore them.
 
         Args:
-            session_id (str): Root of the family dismissed by the person or a verified read receipt.
-            only_if_finished (bool): Keep a read-acknowledged family visible while any worker
-                still has active or uncertain work. Manual dismissal leaves this False.
+            session_id (str): Root of the family explicitly dismissed by the person.
 
         Returns:
             None: The local card is removed; later real provider activity can recreate it.
@@ -311,9 +308,6 @@ class AgentRegistry:
             if descendants <= hidden:
                 break
             hidden.update(descendants)
-        if only_if_finished and any(self.agents[sid]["state"] not in {"done", "idle", "error"}
-                                    for sid in hidden if sid in self.agents):
-            return
         for sid in hidden:
             self.dismissed[sid] = time.time()
             self.agents.pop(sid, None)
@@ -368,7 +362,29 @@ class AgentRegistry:
         Returns:
             None: No value is returned.
         """
-        await self.hub.update("agents", list(self.agents.values()))
+        if not self.restoring:
+            await self.hub.update("agents", list(self.agents.values()))
+
+    def _expire(
+        self,
+        cutoff: float,
+        ) -> bool:
+        """
+        Remove inactive observations older than the configured retention boundary.
+
+        Args:
+            cutoff (float): Oldest retained real activity time, in Unix seconds.
+
+        Returns:
+            bool: True when at least one expired session and its tool/job bookkeeping were removed.
+        """
+        gone = [sid for sid, agent in self.agents.items()
+                if agent["state"] not in {"working", "waiting"} and agent["activity_at"] < cutoff]
+        for sid in gone:
+            self.agents.pop(sid)
+            self.tools.pop(sid, None)
+            self.jobs.pop(sid, None)
+        return bool(gone)
 
     async def prune_forever(
         self,
@@ -385,17 +401,7 @@ class AgentRegistry:
         stale = float(self.cfg.get("stale_hours", 24)) * 3600
         while True:
             await asyncio.sleep(60)
-            cutoff = time.time() - stale
-            gone = [
-                k for k, a in self.agents.items()
-                if a["state"] not in {"working", "waiting"}
-                and float(a.get("activity_at") or a["updated_at"]) < cutoff
-            ]
-            for k in gone:
-                del self.agents[k]
-                self.tools.pop(k, None)
-                self.jobs.pop(k, None)
-            if gone:
+            if self._expire(time.time() - stale):
                 await self._publish()
 
 

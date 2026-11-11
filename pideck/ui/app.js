@@ -149,7 +149,7 @@ function childHtml(a, peers, depth = 0) {
   const seed = peers.filter(b => b.name === a.name).length > 1 ? a.id : a.name;
   return `<div class="agent-worker" data-id="${esc(a.id)}" data-state="${esc(a.state)}" data-kind="${esc(a.agent || "claude")}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" data-subagent="true" data-parent-id="${esc(a.parent_id)}" style="--depth:${Math.min(depth, 3)}">
     ${spriteHtml()}<div class="worker-copy"><div class="name" title="${esc(a.name)}">${esc(a.name)}</div><div class="tag">#${sessionTag(a.id)}</div><div class="meta">${activityHtml(a)}</div></div>
-    ${a.state === "done" ? `<span class="worker-done" aria-label="Unseen completion">✓</span>` : ""}
+    ${a.state === "done" ? `<span class="worker-done" aria-label="Completed">✓</span>` : ""}
     <button class="dismiss-agent" data-dismiss-agent="${esc(a.id)}" aria-label="Dismiss ${esc(a.name)}" title="Hide this worker. Does not stop the task.">×</button>
   </div>`;
 }
@@ -162,8 +162,8 @@ function tileHtml(a, peers, workers = []) {
   const active = workers.filter(({agent}) => ["working", "waiting"].includes(agent.state)).length;
   // Encoding the stable session ID keeps aria-controls unique without inserting raw IDs into markup.
   const drawerId = "workers-" + encodeURIComponent(a.id);
-  return `<div class="tile" data-id="${esc(a.id)}" data-state="${esc(a.state)}" data-kind="${esc(a.agent || "claude")}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%" ${a.state === "done" ? `data-unseen="true"` : ""}>
-    ${a.state === "done" ? `<span class="completion-badge" role="img" aria-label="Unseen completion">✓</span>` : ""}
+  return `<div class="tile" data-id="${esc(a.id)}" data-state="${esc(a.state)}" data-kind="${esc(a.agent || "claude")}" data-name="${esc(a.name)}" data-seed="${esc(seed)}" style="--ctx:${ctx ?? 0}%" ${a.state === "done" ? `data-completed="true"` : ""}>
+    ${a.state === "done" ? `<span class="completion-badge" role="img" aria-label="Completed">✓</span>` : ""}
     <div class="parent-heading">${spriteHtml()}<div class="parent-copy"><div class="name" title="${esc(a.name)}">${esc(a.name)}</div><div class="tag" title="${esc(mark)}">${esc(mark)}</div></div></div>
     <div class="meta">${activityHtml(a)}</div>
     <div class="context-label">Context ${ctx == null ? "unavailable" : ctx + "%"}</div>
@@ -254,14 +254,14 @@ function miniAgents(list) {
     if (!items.length) return "";
     return `<div class="mini-group">${providerLogo(kind)}${items.map((a) => {
       const same = items.filter((other) => other.name === a.name);
-      const unseen = a.state === "done";
+      const completed = a.state === "done";
       const isSub = Boolean(a.parent_id);
       const parent = isSub && S.agents.find((b) => b.id === a.parent_id);
       const title = isSub ? `${a.name} · sub of ${parent?.name || "parent"} · ${a.state}` : `${a.name} · ${a.state}`;
       return `<button type="button" class="mini-session${isSub ? " subagent" : ""}" data-open-agent="${esc(a.id)}" data-id="${esc(a.id)}" data-state="${a.state}"
-        data-name="${esc(a.name)}" data-seed="${esc(same.length > 1 ? a.id : a.name)}" data-unseen="${unseen}"${isSub ? ` data-subagent="true"` : ""}
+        data-name="${esc(a.name)}" data-seed="${esc(same.length > 1 ? a.id : a.name)}" data-completed="${completed}"${isSub ? ` data-subagent="true"` : ""}
         aria-label="Show ${esc(a.name)}, ${PROVIDERS[kind]}, ${esc(a.state)}" title="${esc(title)}">
-        <canvas width="12" height="12" aria-hidden="true"></canvas>${isSub ? `<span class="mini-sub" aria-hidden="true">↳</span>` : ""}${unseen ? `<span class="mini-completion" aria-label="Unseen completion">✓</span>` : ""}</button>`;
+        <canvas width="12" height="12" aria-hidden="true"></canvas>${isSub ? `<span class="mini-sub" aria-hidden="true">↳</span>` : ""}${completed ? `<span class="mini-completion" aria-label="Completed">✓</span>` : ""}</button>`;
     }).join("")}</div>`;
   }).join("");
 }

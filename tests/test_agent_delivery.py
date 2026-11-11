@@ -11,13 +11,14 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any
 
 from fastapi.testclient import TestClient
 import pytest
 
 from hooks.event_store import pending, remember
-from hooks.runtime import codex_viewed, cursor_metrics
+from hooks.runtime import cursor_metrics
 from pideck.hub import Hub
 from pideck.local_prime import synchronize_hooks
 from pideck.sources.agents import AgentEvent, AgentRegistry
@@ -108,15 +109,16 @@ def test_measurements_do_not_reorder_lifecycle_and_restore_is_not_live() -> None
             None: The registry preserves source ordering and truthful restoration behavior.
         """
         registry = AgentRegistry(Hub(), {})
-        await registry.handle(AgentEvent(session_id="s", event="UserPromptSubmit", activity_at=1, replay=True))
+        now = time.time()
+        await registry.handle(AgentEvent(session_id="s", event="UserPromptSubmit", activity_at=now, replay=True))
         await registry.finish_restore()
         assert registry.agents["s"]["state"] == "unknown"
-        await registry.handle(AgentEvent(session_id="s", event="PreToolUse", activity_at=2, tool_use_id="t"))
+        await registry.handle(AgentEvent(session_id="s", event="PreToolUse", activity_at=now + 2, tool_use_id="t"))
         assert registry.agents["s"]["state"] == "working"
-        await registry.handle(AgentEvent(session_id="s", event="BackgroundUpdate", activity_at=4, background_tasks=[]))
-        await registry.handle(AgentEvent(session_id="s", event="Stop", activity_at=3))
+        await registry.handle(AgentEvent(session_id="s", event="BackgroundUpdate", activity_at=now + 4, background_tasks=[]))
+        await registry.handle(AgentEvent(session_id="s", event="Stop", activity_at=now + 3))
         assert registry.agents["s"]["state"] == "done"
-        await registry.handle(AgentEvent(session_id="s", event="Interrupt", activity_at=5))
+        await registry.handle(AgentEvent(session_id="s", event="Interrupt", activity_at=now + 5))
         await registry.handle(AgentEvent(session_id="s", event="BackgroundUpdate", background_tasks=[]))
         assert registry.agents["s"]["state"] == "error"
         await registry.handle(AgentEvent(session_id="closed", event="UserPromptSubmit"))
@@ -204,33 +206,6 @@ def test_local_repair_updates_owned_hooks_and_preserves_remote_choice(
 
 
 # --- Verified-schema local metadata ---
-
-
-def test_codex_receipt_requires_matching_turn_and_known_schema(
-    tmp_path: Path,
-    ) -> None:
-    """
-    Refuse to dismiss a new completion using an older read receipt or an unfamiliar schema.
-
-    Args:
-        tmp_path (Path): Isolated Codex home.
-
-    Returns:
-        None: Only the exact published and acknowledged turn qualifies for dismissal.
-    """
-    path = tmp_path / ".codex/state_5.sqlite"
-    path.parent.mkdir()
-    with sqlite3.connect(path) as connection:
-        connection.execute("CREATE TABLE thread_read_receipts (thread_id TEXT, first_unread_turn TEXT, revision TEXT, last_published_turn TEXT)")
-        connection.execute("INSERT INTO thread_read_receipts VALUES ('s', 'new', '1', 'new')")
-    assert not codex_viewed("s", "new", tmp_path)
-    with sqlite3.connect(path) as connection:
-        connection.execute("UPDATE thread_read_receipts SET first_unread_turn = NULL")
-    assert codex_viewed("s", "new", tmp_path)
-    assert not codex_viewed("s", "old", tmp_path)
-    with sqlite3.connect(path) as connection:
-        connection.execute("ALTER TABLE thread_read_receipts ADD COLUMN changed_semantics TEXT")
-    assert not codex_viewed("s", "new", tmp_path)
 
 
 def test_cursor_background_waits_for_structured_exit_footer(
@@ -415,8 +390,6 @@ def test_parent_completion_does_not_invent_child_completion(
     registry = client.app.state.agents
     assert registry.agents["c"]["state"] == "unknown"
     assert registry.agents["c"]["activity_label"] == "Status unknown"
-    asyncio.run(registry.dismiss("p", only_if_finished=True))
-    assert set(registry.agents) == {"p", "c", "g"}
     client.delete("/api/agents/p")
     assert not registry.agents
     assert {"p", "c", "g"} <= registry.dismissed.keys()
@@ -464,3 +437,150 @@ def test_child_attention_alerts_but_completion_stays_in_drawer(
         assert ws.receive_json()["type"] == "state"
         client.post("/api/agents/event", json={"session_id": "parent", "event": "PostToolUse"})
         assert ws.receive_json()["type"] == "state"
+
+
+# --- Startup snapshots and retained completions ---
+
+
+def test_startup_restore_filters_expired_history_before_publishing(
+    monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+    """
+    Publish only the final recent snapshot while preserving work confirmed during restoration.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Helper capturing agent publications without a display.
+
+    Returns:
+        None: Expired cards never appear, recent completions remain, and fresh work stays working.
+    """
+    async def exercise() -> None:
+        """
+        Interleave expired history, recent results, and a live update during initial replay.
+
+        Returns:
+            None: One final, filtered agent snapshot is published.
+        """
+        hub = Hub()
+        published = []
+        async def capture(
+            message: dict,
+            ) -> None:
+            """
+            Record deep copies of agent snapshots rather than references to mutable session state.
+
+            Args:
+                message (dict): Hub message generated by the registry.
+
+            Returns:
+                None: Agent snapshots are retained for assertions.
+            """
+            if message.get("key") == "agents":
+                published.append(json.loads(json.dumps(message["value"])))
+        monkeypatch.setattr(hub, "_broadcast", capture)
+        registry = AgentRegistry(hub, {"stale_hours": 1})
+        registry.restoring = True
+        now = time.time()
+        for event in (
+            AgentEvent(session_id="expired-result", event="Stop", activity_at=now - 7200, replay=True),
+            AgentEvent(session_id="expired-work", event="PreToolUse", tool_use_id="old", background_tasks=["old-job"], activity_at=now - 7200, replay=True),
+            AgentEvent(session_id="recent-result", event="Stop", agent="codex", activity_at=now - 60, replay=True),
+            AgentEvent(session_id="unconfirmed-work", event="UserPromptSubmit", activity_at=now - 30, replay=True),
+            AgentEvent(session_id="fresh-work", event="UserPromptSubmit", activity_at=now),
+        ):
+            await registry.handle(event)
+        assert not published
+        await registry.finish_restore()
+        assert len(published) == 1
+        assert {agent["id"] for agent in published[0]} == {"recent-result", "unconfirmed-work", "fresh-work"}
+        assert registry.agents["recent-result"]["state"] == "done"
+        assert registry.agents["unconfirmed-work"]["state"] == "unknown"
+        assert registry.agents["fresh-work"]["state"] == "working"
+        assert "expired-work" not in registry.tools and "expired-work" not in registry.jobs
+        await registry.handle(AgentEvent(session_id="fresh-work", event="Stop"))
+        assert len(published) == 2
+    asyncio.run(exercise())
+
+
+def test_monitor_replays_all_batches_and_keeps_viewed_completions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+    """
+    Finish startup replay before publishing and keep completed Codex cards after harness viewing.
+
+    Args:
+        tmp_path (Path): Isolated provider home and receipt database.
+        monkeypatch (pytest.MonkeyPatch): Helper isolating hooks, queue reads, and background polling.
+
+    Returns:
+        None: Multiple replay batches yield one recent completed card despite a matching read receipt.
+    """
+    from pideck import local_prime
+
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    with sqlite3.connect(home / ".codex/state_5.sqlite") as connection:
+        connection.execute("CREATE TABLE thread_read_receipts (thread_id TEXT, first_unread_turn TEXT, revision TEXT, last_published_turn TEXT)")
+        connection.execute("INSERT INTO thread_read_receipts VALUES ('recent', NULL, '1', 'turn')")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(local_prime, "synchronize_hooks", lambda address: False)
+    hub = Hub()
+    registry = AgentRegistry(hub, {})
+    reads = []
+    now = time.time()
+    def queued(
+        address: str,
+        after: int,
+        env: dict,
+        ) -> list[tuple[int, dict]]:
+        """
+        Return an old full page followed by one recent completion.
+
+        Args:
+            address (str): Display destination requested by the monitor.
+            after (int): Previously consumed journal sequence number.
+            env (dict): Runtime environment unused by this isolated queue.
+
+        Returns:
+            list[tuple[int, dict]]: Sequenced events simulating a multi-page startup journal.
+        """
+        reads.append(after)
+        assert hub.state.get("agents", []) == []
+        if after == 0:
+            return [(i, {"session_id": "expired", "event": "Stop", "agent": "codex", "activity_at": now - 172800}) for i in range(1, 2001)]
+        return [(2001, {"session_id": "recent", "event": "Stop", "agent": "codex", "turn_id": "turn", "activity_at": now - 10})]
+    async def allowances(
+        agents: AgentRegistry,
+        ) -> None:
+        """
+        Wait without opening provider connections while the monitor is exercised.
+
+        Args:
+            agents (AgentRegistry): Isolated registry whose account polling is disabled.
+
+        Returns:
+            None: Runs until cancelled by monitor cleanup.
+        """
+        await asyncio.Event().wait()
+    async def stop(
+        seconds: float,
+        ) -> None:
+        """
+        End the test after the monitor completes its first live polling iteration.
+
+        Args:
+            seconds (float): Requested polling delay, unused by the test.
+
+        Returns:
+            None: Never returns normally; cancellation exercises monitor cleanup.
+        """
+        raise asyncio.CancelledError
+    monkeypatch.setattr(local_prime, "pending", queued)
+    monkeypatch.setattr(local_prime, "refresh_allowances", allowances)
+    monkeypatch.setattr(local_prime.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(local_prime.monitor(registry, lambda: "http://localhost:8765"))
+    assert reads == [0, 2000]
+    assert [agent["id"] for agent in hub.state["agents"]] == ["recent"]
+    assert registry.agents["recent"]["state"] == "done"

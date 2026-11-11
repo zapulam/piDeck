@@ -221,7 +221,7 @@ def test_random_sprite_motion_in_chromium(
     tmp_path: Path,
     ) -> None:
     """
-    Check independent motion clocks, rendered faces, and intermittent thought bubbles.
+    Check working blinks and dots while idle and completed sprites remain still.
 
     Args:
         tmp_path (Path): Isolated directory for server configuration.
@@ -239,41 +239,41 @@ def test_random_sprite_motion_in_chromium(
                 page.goto(url)
                 page.wait_for_selector('.tile[data-state="working"]')
                 result = page.evaluate("""() => {
-                    const first = creatureMotion('idle', 0), second = creatureMotion('idle', 0);
+                    const first = creatureMotion('working', 0), second = creatureMotion('working', 0);
                     const blinkAt = first.blinkAt;
                     const blink = stepCreatureMotion(first, blinkAt);
                     const blinkEnded = stepCreatureMotion(first, blinkAt + 250);
-                    const looking = stepCreatureMotion(second, second.lookAt);
+                    const idle = creatureMotion('idle', 0);
+                    const idlePose = stepCreatureMotion(idle, 1000000);
                     const thinker = creatureMotion('working', 0);
                     const thought = stepCreatureMotion(thinker, thinker.thinkAt);
                     const pauseAt = thinker.thinkUntil + 1;
                     const pause = stepCreatureMotion(thinker, pauseAt);
                     const cv = document.createElement('canvas'); cv.width = cv.height = 12;
                     const pixels = (pose) => {
-                        drawCreature(cv, {name: 'piDeck', state: 'idle', ...pose});
+                        drawCreature(cv, {name: 'piDeck', state: 'working', ...pose});
                         return cv.toDataURL();
                     };
                     const awake = pixels({});
-                    const blinkPixels = pixels({blink: true});
-                    const glancePixels = pixels({look: -1});
-                    const working = pixels({state: 'working', frame: 0});
-                    const workingLater = pixels({state: 'working', frame: 3});
                     const accessories = ACCESSORIES.map(accessory => pixels({state: 'celebrating', accessory}));
                     return {
-                        independent: first.blinkAt !== second.blinkAt && first.lookAt !== second.lookAt,
+                        independent: first.blinkAt !== second.blinkAt,
                         blink: blink.blink, blinkEnded: blinkEnded.blink,
-                        looking: Math.abs(looking.look) === 1,
+                        idleStill: !idlePose.blink && !idlePose.thinking && !('look' in idlePose),
+                        idlePixels: pixels({state: 'idle', frame: 0}) === pixels({state: 'idle', frame: 3, ...idlePose}),
+                        doneStill: pixels({state: 'done', frame: 0}) === pixels({state: 'done', frame: 3}),
                         thought: thought.thinking, pause: pause.thinking,
                         futureThought: thinker.thinkAt > pauseAt,
-                        blinkPixels: awake !== blinkPixels, glancePixels: awake !== glancePixels,
-                        noShine: working === workingLater,
+                        blinkPixels: awake !== pixels({blink: true}),
+                        noShine: awake === pixels({frame: 3}),
                         accessories: new Set(accessories).size === 4 && accessories.every(p => p !== awake),
                     };
                 }""")
                 assert result == {
-                    "independent": True, "blink": True, "blinkEnded": False, "looking": True,
+                    "independent": True, "blink": True, "blinkEnded": False,
+                    "idleStill": True, "idlePixels": True, "doneStill": True,
                     "thought": True, "pause": False, "futureThought": True,
-                    "blinkPixels": True, "glancePixels": True, "noShine": True, "accessories": True,
+                    "blinkPixels": True, "noShine": True, "accessories": True,
                 }
                 page.evaluate("""() => {
                     const tile = document.querySelector('.tile[data-state="working"]');
@@ -785,6 +785,26 @@ def test_nested_work_drawers_keep_parent_geometry_and_worker_identity(
                     assert bubble.evaluate("el => getComputedStyle(el).backgroundColor") == "rgba(0, 0, 0, 0)"
                     assert bubble.locator("i").first.evaluate("el => getComputedStyle(el).backgroundColor") == "rgb(255, 255, 255)"
                     assert parent.locator(":scope > .parent-heading .laptop").is_visible()
+                    geometry = page.evaluate("""() => [...document.querySelectorAll('.tile[data-state=working] > .parent-heading .sprite, .agent-worker[data-state=working] > .sprite')].map(sprite => {
+                        const owner = sprite.closest('.agent-worker, .tile');
+                        const canvas = sprite.querySelector('canvas').getBoundingClientRect();
+                        const laptop = sprite.querySelector('.laptop').getBoundingClientRect();
+                        const pixel = canvas.width / 12;
+                        const eye = FRUIT[fruitFor(owner.dataset.seed || owner.dataset.name)].eye;
+                        return laptop.top >= canvas.top + (eye + 2) * pixel - .1 &&
+                            Math.abs(sprite.getBoundingClientRect().bottom - laptop.bottom - 2 * pixel) < .1;
+                    })""")
+                    assert geometry and all(geometry)
+                    client.post("api/agents/event", json={"session_id": "family-b", "event": "Stop"})
+                    badge = page.locator('.tile[data-id="family-b"] .completion-badge')
+                    badge.wait_for()
+                    box = badge.bounding_box()
+                    assert box["width"] == box["height"] == 20
+                    assert badge.get_attribute("aria-label") == "Completed"
+                    page.locator("#alert.agent-done").wait_for()
+                    page.locator("#alert").click()
+                    page.locator("#alert").wait_for(state="hidden")
+
                     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
                 assert not errors
                 Path("test-results/browser").mkdir(parents=True, exist_ok=True)
