@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from hooks.event_store import destination, pending
 from hooks.install import MARK, _is_ours, main as install_hooks, read_json
-from hooks.runtime import codex_viewed, cursor_metrics
+from hooks.runtime import cursor_metrics
 from .codex_usage import allowances
 from .sources.agents import AgentEvent, AgentRegistry
 
@@ -71,7 +71,7 @@ async def monitor(
     address: Callable[[], str],
     ) -> None:
     """
-    Consume durable hook events, reported context/jobs, account limits, and exact read receipts.
+    Restore recent events atomically, then monitor reported context, jobs, and account limits.
 
     Args:
         agents (AgentRegistry): Registry receiving actual provider updates.
@@ -80,6 +80,7 @@ async def monitor(
     Returns:
         None: Runs until application shutdown cancels this source.
     """
+    agents.restoring = True
     await asyncio.to_thread(synchronize_hooks, address())
     sequence = 0
     restoring = True
@@ -95,9 +96,10 @@ async def monitor(
                     await agents.handle(AgentEvent(**{**body, "replay": restoring}))
                 except ValueError:
                     log.warning("Ignored an unsupported cached agent event")
-            if len(rows) < 2000:
-                if restoring:
-                    await agents.finish_restore()
+            if restoring:
+                if len(rows) == 2000:
+                    continue  # Finish the journal before publishing or polling old sessions.
+                await agents.finish_restore()
                 restoring = False
             cursor_values = {sid: value for sid, value in cursor_values.items() if sid in agents.agents}
             for current in list(agents.agents.values()):
@@ -112,9 +114,6 @@ async def monitor(
                         if "background_tasks" in metrics and current["state"] == "working":
                             await agents.handle(AgentEvent(session_id=sid, agent="cursor", event="BackgroundUpdate",
                                                            background_tasks=metrics["background_tasks"]))
-                elif current["agent"] == "codex" and current["state"] == "done":
-                    if await asyncio.to_thread(codex_viewed, sid, current.get("turn_id") or "", Path.home()):
-                        await agents.dismiss(sid, only_if_finished=True)
             await asyncio.sleep(1)
     finally:
         usage_task.cancel()

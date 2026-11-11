@@ -58,32 +58,26 @@ const randomBetween = (min, max) => min + Math.random() * (max - min);
 // Keep these clocks per session, outside the DOM, so unrelated updates don't reset them.
 function creatureMotion(state, now) {
   return { state, blinkAt: now + randomBetween(2000, 6500), blinkUntil: 0,
-    lookAt: now + randomBetween(2500, 7000), lookUntil: 0, look: 0,
     thinkAt: now + randomBetween(2500, 8000), thinkUntil: 0 };
 }
 function stepCreatureMotion(m, now) {
-  if (["idle", "working", "waiting"].includes(m.state)) {
+  if (["working", "waiting"].includes(m.state)) {
     if (now >= m.blinkAt) {
       m.blinkUntil = now + 200;
       m.blinkAt = m.blinkUntil + randomBetween(2500, 6500);
-    }
-    if (m.state === "idle" && now >= m.lookAt) {
-      m.look = Math.random() < .5 ? -1 : 1;
-      m.lookUntil = now + randomBetween(700, 1400);
-      m.lookAt = m.lookUntil + randomBetween(2500, 7000);
     }
   }
   if (m.state === "working" && now >= m.thinkAt) {
     m.thinkUntil = now + randomBetween(1800, 3000);
     m.thinkAt = m.thinkUntil + randomBetween(4000, 10000);
   }
-  return { blink: now < m.blinkUntil, look: now < m.lookUntil ? m.look : 0,
+  return { blink: ["working", "waiting"].includes(m.state) && now < m.blinkUntil,
     thinking: now < m.thinkUntil };
 }
 
 // frame: integer tick (animations key off it). Draws one fruit into `canvas`.
 // `seed` picks the fruit when several sessions share a name; otherwise the name does.
-function drawCreature(canvas, { state, name = "", seed, frame = 0, blink = false, look = 0, accessory }) {
+function drawCreature(canvas, { state, name = "", seed, frame = 0, blink = false, accessory }) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, 12, 12);
   const f = FRUIT[fruitFor(seed || name)];
@@ -99,16 +93,14 @@ function drawCreature(canvas, { state, name = "", seed, frame = 0, blink = false
 
   // eyes: 2x2 dark with a single white pixel top-left
   const e = f.eye, P = "#10131a";
-  const open = (dx = 0) => [[3, 4], [7, 8]].forEach(([a, b]) => {
-    [a, b].forEach((x) => { px(x + dx, e, P); px(x + dx, e + 1, P); });
-    px(a + dx, e, "#ffffff");
+  const open = () => [[3, 4], [7, 8]].forEach(([a, b]) => {
+    [a, b].forEach((x) => { px(x, e, P); px(x, e + 1, P); });
+    px(a, e, "#ffffff");
   });
-  if (state === "done" || blink) [3, 4, 7, 8].forEach((x) => px(x + look, e + 1, P));   // closed
-  else if (state === "idle") open(look);
+  if (state === "done" || blink) [3, 4, 7, 8].forEach((x) => px(x, e + 1, P));   // closed
   else open();
 
   // state decorations
-  if (state === "done" && frame % 4 < 3) [[9, 0], [10, 0], [10, 1]].forEach(([x, y]) => px(x, y, "#cfe9ff"));   // z
   if (state === "waiting" && frame % 2 === 0) { ctx.fillStyle = "#fff"; ctx.fillRect(10, 0, 1, 2); ctx.fillRect(10, 3, 1, 1); }   // "!"
   if (state === "error") { px(10, e - 1, "#7fd8ff"); px(10, e, "#7fd8ff"); }   // sweat drop
 
