@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 import subprocess
 import sys
@@ -26,13 +27,16 @@ import pideck_hook as hook
 
 
 @pytest.mark.parametrize("event, expected", [
-    ("sessionStart", "idle"), ("beforeSubmitPrompt", "working"),
+    ("beforeSubmitPrompt", "working"),
     ("postToolUse", "working"), ("stop", "done"),
 ])
+@pytest.mark.parametrize("source", ["cursor", "claude"])
 def test_cursor_hooks_roundtrip(
     client: TestClient,
     event: Any,
     expected: Any,
+    source: str,
+    tmp_path: Path,
     ) -> None:
     """
     Map documented Cursor hook names and stable conversation IDs to provider tiles.
@@ -41,6 +45,8 @@ def test_cursor_hooks_roundtrip(
         client (TestClient): Authenticated test client for the isolated application.
         event (Any): Provider event name or event fields to handle.
         expected (Any): Expected normalized value or response fields for this test case.
+        source (str): Explicit provider flag or legacy default requiring payload detection.
+        tmp_path (Path): Isolated provider metadata representing a completed conversation.
 
     Returns:
         None: Assertions or fixture setup completed successfully.
@@ -48,7 +54,12 @@ def test_cursor_hooks_roundtrip(
     payload = {"hook_event_name": event, "conversation_id": "conversation", "generation_id": "turn",
                "workspace_roots": ["C:/work/project"], "status": "completed",
                "prompt": "private prompt", "user_email": "private@example.com", "tool_input": {"secret": "private"}}
-    outgoing = hook.build_event(payload, {}, "cursor")
+    database = tmp_path / "state.vscdb"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        connection.execute("INSERT INTO cursorDiskKV VALUES (?, ?)",
+                           ("composerData:conversation", json.dumps({"status": "completed"})))
+    outgoing = hook.build_event(payload, {"CURSOR_STATE_DB": str(database)}, source)
     assert "private" not in json.dumps(outgoing)
     response = client.post("/api/agents/event", json=outgoing)
     assert response.status_code == 200
@@ -57,11 +68,28 @@ def test_cursor_hooks_roundtrip(
         "cursor:conversation", "cursor", "project", expected)
 
 
-def test_cursor_compaction_snapshot_is_cleared_by_later_activity(
+def test_cursor_missing_job_metadata_remains_unknown(
+    tmp_path: Path,
+    ) -> None:
+    """
+    Avoid claiming completion when Cursor cannot confirm its background-terminal state.
+
+    Args:
+        tmp_path (Path): Directory deliberately lacking the provider state database.
+
+    Returns:
+        None: An ended response with unavailable job metadata stays manually dismissible.
+    """
+    event = hook.build_event({"hook_event_name": "stop", "conversation_id": "s", "status": "completed"},
+                             {"CURSOR_STATE_DB": str(tmp_path / "missing.sqlite")}, "cursor")
+    assert event["state"] == "unknown"
+
+
+def test_cursor_obsolete_compaction_does_not_guess_completion(
     client: TestClient,
     ) -> None:
     """
-    Use Cursor's reported context snapshot, then clear it rather than implying live usage.
+    Ignore old pre-compaction estimates and keep unverified job completion unknown.
 
     Args:
         client (TestClient): Authenticated test client for the isolated application.
@@ -73,19 +101,17 @@ def test_cursor_compaction_snapshot_is_cleared_by_later_activity(
     start = hook.build_event({**base, "hook_event_name": "beforeSubmitPrompt"}, {}, "cursor")
     client.post("/api/agents/event", json=start)
     compact = hook.build_event({**base, "hook_event_name": "preCompact", "context_usage_percent": 85}, {}, "cursor")
-    agent = client.post("/api/agents/event", json=compact).json()["agent"]
-    assert agent["state"] == "working" and agent["context_pct"] == 85
+    assert compact is None  # A pre-compaction sample is not current context.
     stop = hook.build_event({**base, "hook_event_name": "stop", "status": "completed"}, {}, "cursor")
     agent = client.post("/api/agents/event", json=stop).json()["agent"]
-    assert agent["context_pct"] is None and agent["state"] == "done"
+    assert agent["context_pct"] is None and agent["state"] == "unknown"
     end = hook.build_event({"session_id": "c", "hook_event_name": "sessionEnd"}, {}, "cursor")
-    assert client.post("/api/agents/event", json=end).json()["agent"] is None
-    assert client.app.state.hub.state["agents"] == []
+    assert client.post("/api/agents/event", json=end).json()["agent"]["state"] == "unknown"
 
 
 @pytest.mark.parametrize("payload, expected", [
     ({"hook_event_name": "stop", "status": "error"}, "error"),
-    ({"hook_event_name": "stop", "status": "aborted"}, "idle"),
+    ({"hook_event_name": "stop", "status": "aborted"}, "error"),
     ({"hook_event_name": "postToolUseFailure", "failure_type": "permission_denied"}, "waiting"),
 ])
 def test_cursor_failures_and_cancellation(
@@ -186,7 +212,7 @@ def test_cursor_ignores_unrelated_hooks_and_invalid_context() -> None:
     assert hook.build_event({"hook_event_name": "stop"}, {}, "cursor") is None
     event = hook.build_event({"hook_event_name": "preCompact", "conversation_id": "c",
                               "context_usage_percent": 200}, {}, "cursor")
-    assert event["context_pct"] is None and "usage" not in event
+    assert event is None
 
 
 @pytest.mark.parametrize("event, expected", [
@@ -195,6 +221,7 @@ def test_cursor_ignores_unrelated_hooks_and_invalid_context() -> None:
 def test_cursor_returns_valid_hook_json_when_display_is_offline(
     event: Any,
     expected: Any,
+    tmp_path: Path,
     ) -> None:
     """
     An unavailable piDeck must not turn the prompt hook into a blocking invalid response.
@@ -202,6 +229,7 @@ def test_cursor_returns_valid_hook_json_when_display_is_offline(
     Args:
         event (Any): Provider event name or event fields to handle.
         expected (Any): Expected normalized value or response fields for this test case.
+        tmp_path (Path): Isolated hook configuration and metadata directory.
 
     Returns:
         None: Assertions or fixture setup completed successfully.
@@ -210,7 +238,9 @@ def test_cursor_returns_valid_hook_json_when_display_is_offline(
     result = subprocess.run([sys.executable, str(script), "--source", "cursor"],
                             input=json.dumps({"hook_event_name": event, "conversation_id": "c"}),
                             text=True, capture_output=True, timeout=5,
-                            env={**os.environ, "PIDECK_URL": "http://127.0.0.1:1"})
+                            env={**os.environ, "PIDECK_URL": "http://127.0.0.1:1",
+                                 "PIDECK_CONFIG": str(tmp_path / "hook.json"),
+                                 "CURSOR_STATE_DB": str(tmp_path / "missing.vscdb")})
     assert result.returncode == 0 and result.stderr == ""
     assert json.loads(result.stdout) == expected
 

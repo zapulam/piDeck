@@ -25,8 +25,7 @@ modules:
   agents:
     enabled: true
     alert_on: [done, waiting]   # done = agent finished, waiting = needs your input
-    stale_hours: 24             # drop tiles with no real activity for this long (not prime refresh)
-    context_window: 200000      # tokens, used by the hook to compute ctx %
+    stale_hours: 24             # expire inactive results; active work never expires by age
   spotify:
     enabled: true
     poll_seconds: 3

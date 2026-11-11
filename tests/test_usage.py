@@ -46,7 +46,8 @@ def test_usage_update_preserves_session_state_and_snapshot(
         assert response.status_code == 200
         assert ws.receive_json()["key"] == "agent_usage"
         agent = ws.receive_json()["value"][0]
-        assert agent == {**before, "context_pct": 42}
+        assert agent.pop("context_at") >= before["context_at"]
+        assert agent == {key: value for key, value in {**before, "context_pct": 42}.items() if key != "context_at"}
         # An unknown/ended session must not be recreated by a late status-line callback.
         client.post("/api/agents/event", json={"session_id": "late", "event": "UsageUpdate", "agent": "codex",
                                               "usage": {"secondary": {"used_pct": 89, "window_minutes": 10080}}})
@@ -134,8 +135,7 @@ def test_codex_context_uses_last_turn_and_latest_account_windows(
     payload = {"session_id": "s", "hook_event_name": "Stop", "transcript_path": str(transcript)}
     event = hook.build_event(payload, {}, "codex")
     assert event["context_pct"] == 25
-    assert event["usage"]["primary"]["used_pct"] == 15
-    assert event["usage"]["secondary"] is None
+    assert "usage" not in event  # Account windows now come from the live app-server API.
     assert "total_tokens" not in json.dumps(event)
 
 

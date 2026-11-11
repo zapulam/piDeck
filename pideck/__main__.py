@@ -104,7 +104,7 @@ def main() -> None:
     ap.add_argument("--port", type=int)
     ap.add_argument("--tls-cert", help="TLS certificate chain for direct HTTPS access")
     ap.add_argument("--tls-key", help="private key for direct HTTPS access")
-    ap.add_argument("--no-prime", action="store_true", help="do not inspect local agent sessions or sign-ins")
+    ap.add_argument("--no-prime", action="store_true", help="disable local hook replay and provider measurement reads")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     cfg = load_config(a.config)

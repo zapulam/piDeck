@@ -1,74 +1,142 @@
 """
 
-Publish local session and usage snapshots after piDeck is listening.
-
-The hook script stays stdlib-only and is what actually reads the files. This module
-only starts it, so a remote Pi never has to see the session transcripts.
+Replay real hook events and refresh verified measurements without transcript-age guesses.
 
 """
 
 from __future__ import annotations
 
-import subprocess
-import sys
+import asyncio
+import contextlib
+import logging
 import os
 from pathlib import Path
+from typing import Callable
+from urllib.parse import urlsplit
+
+from hooks.event_store import destination, pending
+from hooks.install import MARK, _is_ours, main as install_hooks, read_json
+from hooks.runtime import codex_viewed, cursor_metrics
+from .codex_usage import allowances
+from .sources.agents import AgentEvent, AgentRegistry
+
+log = logging.getLogger(__name__)
 
 
-# --- Local hook discovery and startup refresh ---
+# --- Owned local connection repair ---
 
-def hook_script() -> Path | None:
+
+def synchronize_hooks(
+    url: str,
+    ) -> bool:
     """
-    Prefer the checkout's hook, then the copy the installer left behind.
-
-    Returns:
-        Path | None: The hook path to run, or None when neither copy exists.
-    """
-    repo = Path(__file__).resolve().parents[1] / "hooks" / "pideck_hook.py"
-    installed = Path.home() / ".config" / "pideck" / "pideck_hook.py"
-    if repo.is_file():
-        return repo
-    if installed.is_file():
-        return installed
-    return None
-
-
-def launch_prime(
-    url: str | None = None,
-    force_claude_usage: bool = False,
-    ) -> None:
-    """
-    Post already-open sessions and the latest allowance sample. Failures stay quiet.
-
-    The child is killed if it is still running after 30 seconds, so a locked
-    Cursor database cannot stall the display.
+    Refresh an existing owned loopback integration after token or helper upgrades.
 
     Args:
-        url (str | None): Owned local server address, preventing saved remote destination confusion.
-        force_claude_usage (bool): When True, bypass Claude's 30-minute usage throttle once so a
-            late piDeck launch still refreshes bars after Claude was already open.
+        url (str): Address of the native server owning this process's hook credential.
 
     Returns:
-        None: No value is returned.
+        bool: True for refreshed existing integrations; False for unconfigured or intentionally
+            remote destinations, which are never overwritten automatically.
     """
-    script = hook_script()
-    if script is None:
-        return
+    home = Path.home()
+    if urlsplit(url).hostname not in {"localhost", "127.0.0.1", "::1"}:
+        return False
+    saved = home / ".config/pideck/hook.json"
+    if not saved.is_file():
+        return False
     try:
-        executable = Path(sys.executable)
-        if getattr(sys, "frozen", False):
-            executable = executable.with_name("piDeck-hook.exe" if sys.platform == "win32" else "piDeck-hook")
-        arguments = [str(executable), str(script), "--prime"]
-        env = dict(os.environ)
-        if url:
-            env["PIDECK_URL"] = url
-        env.pop("PIDECK_TOKEN", None)
-        if force_claude_usage:
-            env["PIDECK_FORCE_CLAUDE_USAGE"] = "1"
-        else:
-            env.pop("PIDECK_FORCE_CLAUDE_USAGE", None)
-        subprocess.run(arguments, timeout=30, check=False, env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       **({"creationflags": 0x08000000} if os.name == "nt" else {}))
-    except (OSError, subprocess.TimeoutExpired):
-        return
+        config = read_json(saved)
+        if destination(config.get("url", "")) != destination(url):
+            return False
+        flags = []
+        for provider, relative in (("claude", ".claude/settings.json"), ("codex", ".codex/hooks.json"),
+                                   ("cursor", ".cursor/hooks.json")):
+            settings = read_json(home / relative)
+            if MARK in str(settings.get("hooks", {})) or _is_ours(settings.get("statusLine") or {}):
+                flags.append("--" + provider)
+        if not flags:
+            return False
+        return install_hooks(["--url", url, "--token", os.environ["PIDECK_HOOK_TOKEN"], "--no-check", *flags]) == 0
+    except (OSError, ValueError, KeyError):
+        log.warning("Local agent connection needs reconnecting in Settings")
+        return False
+
+
+# --- Offline replay and local runtime measurements ---
+
+
+async def monitor(
+    agents: AgentRegistry,
+    address: Callable[[], str],
+    ) -> None:
+    """
+    Consume durable hook events, reported context/jobs, account limits, and exact read receipts.
+
+    Args:
+        agents (AgentRegistry): Registry receiving actual provider updates.
+        address (Callable[[], str]): Bound server address, including a dynamic port.
+
+    Returns:
+        None: Runs until application shutdown cancels this source.
+    """
+    await asyncio.to_thread(synchronize_hooks, address())
+    sequence = 0
+    restoring = True
+    cursor_values = {}
+    if (Path.home() / ".cursor").is_dir():
+        await agents.handle(AgentEvent(session_id="usage:cursor", event="UsageUpdate", agent="cursor", note="unsupported"))
+    usage_task = asyncio.create_task(refresh_allowances(agents))
+    try:
+        while True:
+            rows = await asyncio.to_thread(pending, address(), sequence, os.environ)
+            for sequence, body in rows:
+                try:
+                    await agents.handle(AgentEvent(**{**body, "replay": restoring}))
+                except ValueError:
+                    log.warning("Ignored an unsupported cached agent event")
+            if len(rows) < 2000:
+                if restoring:
+                    await agents.finish_restore()
+                restoring = False
+            cursor_values = {sid: value for sid, value in cursor_values.items() if sid in agents.agents}
+            for current in list(agents.agents.values()):
+                sid = current["id"]
+                if current["agent"] == "cursor" and current["state"] in {"working", "waiting"}:
+                    metrics = await asyncio.to_thread(cursor_metrics, current.get("provider_session_id") or sid.removeprefix("cursor:"), os.environ)
+                    if metrics and metrics != cursor_values.get(sid):
+                        cursor_values[sid] = metrics
+                        if "context_pct" in metrics:
+                            await agents.handle(AgentEvent(session_id=sid, agent="cursor", event="UsageUpdate",
+                                                           context_pct=metrics["context_pct"]))
+                        if "background_tasks" in metrics and current["state"] == "working":
+                            await agents.handle(AgentEvent(session_id=sid, agent="cursor", event="BackgroundUpdate",
+                                                           background_tasks=metrics["background_tasks"]))
+                elif current["agent"] == "codex" and current["state"] == "done":
+                    if await asyncio.to_thread(codex_viewed, sid, current.get("turn_id") or "", Path.home()):
+                        await agents.dismiss(sid, only_if_finished=True)
+            await asyncio.sleep(1)
+    finally:
+        usage_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await usage_task
+
+
+async def refresh_allowances(
+    agents: AgentRegistry,
+    ) -> None:
+    """
+    Refresh account allowances independently so a slow provider never delays lifecycle replay.
+
+    Args:
+        agents (AgentRegistry): Registry receiving fresh account readings and unavailable states.
+
+    Returns:
+        None: Runs until the local monitor cancels its owned task at shutdown.
+    """
+    while True:
+        if (Path.home() / ".codex").is_dir():
+            usage = await allowances(os.environ)
+            await agents.handle(AgentEvent(session_id="usage:codex", event="UsageUpdate", agent="codex",
+                                           usage=usage, note=None if usage else "codex_unavailable"))
+        await asyncio.sleep(60)

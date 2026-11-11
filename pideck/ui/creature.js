@@ -62,12 +62,12 @@ function creatureMotion(state, now) {
     thinkAt: now + randomBetween(2500, 8000), thinkUntil: 0 };
 }
 function stepCreatureMotion(m, now) {
-  if (m.state === "idle") {
+  if (["idle", "working", "waiting"].includes(m.state)) {
     if (now >= m.blinkAt) {
       m.blinkUntil = now + 200;
       m.blinkAt = m.blinkUntil + randomBetween(2500, 6500);
     }
-    if (now >= m.lookAt) {
+    if (m.state === "idle" && now >= m.lookAt) {
       m.look = Math.random() < .5 ? -1 : 1;
       m.lookUntil = now + randomBetween(700, 1400);
       m.lookAt = m.lookUntil + randomBetween(2500, 7000);

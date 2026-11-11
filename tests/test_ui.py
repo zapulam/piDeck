@@ -121,7 +121,7 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                 outline = page.locator('.tile[data-state="working"]').first.evaluate("el => getComputedStyle(el).borderTopColor")
                 assert outline == "rgb(87, 157, 255)"
                 hop = page.locator('.tile[data-state="working"] canvas').first.evaluate("el => getComputedStyle(el).animationName")
-                assert hop == "hop"
+                assert hop == "none"
                 assert page.locator("#pager button").first.evaluate("el => getComputedStyle(el).cursor") == "pointer"
                 assert page.locator('.agent-group[data-provider="cursor"] h3').text_content() == "Cursor"
                 with httpx.Client(base_url=url, trust_env=False) as client:
@@ -144,18 +144,18 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     page.reload()
                     tile.locator(".completion-badge").wait_for()
                     assert page.locator("#alert").is_hidden()
-                    tile.click()
-                    tile.locator(".completion-badge").wait_for(state="detached")
+                    tile.locator(".dismiss-agent").click()
+                    tile.wait_for(state="detached")
                     page.reload()
-                    tile.wait_for()
-                    assert tile.locator(".completion-badge").count() == 0
+                    page.wait_for_function("() => S.initialized === true")
+                    assert tile.count() == 0
                     # Another completed turn in the same session gets a fresh checkmark.
                     client.post("api/agents/event", json={"session_id": "ui-done", "state": "working"})
                     client.post("api/agents/event", json={"session_id": "ui-done", "state": "done"})
                     takeover.wait_for()
                     page.keyboard.press("Escape")
                     tile.locator(".completion-badge").wait_for()
-                    tile.focus()
+                    tile.locator(".dismiss-agent").focus()
                     page.keyboard.press("Enter")
                     tile.locator(".completion-badge").wait_for(state="detached")
                     page.locator("#settings-btn").click()
@@ -176,8 +176,7 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "event": "UsageUpdate", "agent": "cursor", "context_pct": 85})
                     tile = page.locator('[data-id="ui-cursor"]')
                     tile.locator('.context-track[aria-valuenow="85"]').wait_for()
-                    assert "Before compact" in tile.inner_text()
-                    assert "85%" not in tile.inner_text()
+                    assert "Context 85%" in tile.inner_text()
                     client.post("api/agents/event", json={"session_id": "ui-cursor", "event": "PostToolUse", "agent": "cursor", "context_pct": None})
                     page.wait_for_function('() => document.querySelector(\'[data-id="ui-cursor"] .context-label\')?.textContent === "Context unavailable"')
                     client.post("api/agents/event", json={"session_id": "cursor:aaa111", "state": "done", "name": "piDeck", "agent": "cursor"})
@@ -186,6 +185,14 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                     same = page.locator('.agent-group[data-provider="cursor"] .tile[data-name="piDeck"]')
                     tags = same.locator(".tag").all_inner_texts()
                     assert len(tags) == 2 and len(set(tags)) == 2
+                    assert all("#" in tag for tag in tags)
+                    geometry = same.evaluate_all("""els => els.map(el => {
+                        const card = el.getBoundingClientRect();
+                        return ['.name', '.tag', '.meta', '.context-label', '.context-track'].map(selector =>
+                            Math.round(el.querySelector(selector).getBoundingClientRect().top - card.top));
+                    })""")
+                    assert geometry[0] == geometry[1]
+                    assert same.locator('.context-track[data-available="false"]').count() == 2
                     seeds = same.evaluate_all("els => els.map(el => el.dataset.seed)")
                     assert len(set(seeds)) == 2
                     client.post("api/agents/event", json={
@@ -198,15 +205,10 @@ def test_agents_usage_and_cursor_snapshots_in_chromium(
                         "session_id": "ui-done:explore", "state": "working", "name": "Explore",
                         "agent": "claude", "parent_id": "ui-done",
                     })
-                    page.locator('[data-id="ui-done:explore"].subagent .subagent-badge').wait_for()
-                    page.locator('[data-id="ui-done:explore"] .tag.subagent-parent', has_text="of notes").wait_for()
-                    connector = page.locator('[data-id="ui-done:explore"].subagent').evaluate(
-                        """el => {
-                          const style = getComputedStyle(el, '::before');
-                          return style.borderLeftStyle + ' ' + style.borderBottomStyle;
-                        }"""
-                    )
-                    assert connector == "dashed dashed"
+                    orphan = page.locator('.tile[data-id="ui-done:explore"]')
+                    orphan.wait_for()
+                    assert "Parent unavailable" in orphan.locator(".tag").inner_text()
+                    assert page.locator(".subagent-badge").count() == 0
                 assert not errors
             finally:
                 screenshots = Path("test-results/browser")
@@ -330,11 +332,11 @@ def test_completion_queue_and_same_name_sessions_in_chromium(
                     page.wait_for_function('() => document.querySelector("#alert-sprite").dataset.sessionId === "same:222"')
                     page.locator("#alert").wait_for(state="hidden")
                     assert page.locator('.tile[data-name="same"] .completion-badge').count() == 2
-                    # Keyboard acknowledgment affects only the selected session.
+                    # Explicit keyboard dismissal removes only the selected session.
                     first = page.locator('.tile[data-id="same:111"]')
-                    first.focus()
-                    page.keyboard.press("Space")
-                    first.locator(".completion-badge").wait_for(state="detached")
+                    first.locator(".dismiss-agent").focus()
+                    page.keyboard.press("Enter")
+                    first.wait_for(state="detached")
                     assert page.locator('.tile[data-id="same:222"] .completion-badge').count() == 1
                     client.post("api/agents/event", json={"session_id": "same:222", "state": "working"})
                     page.locator('.tile[data-id="same:222"] .completion-badge').wait_for(state="detached")
@@ -647,7 +649,10 @@ def test_compact_usage_focus_and_live_session_updates(
                     mini.click()
                     expect(section).to_have_attribute("data-mode", "agents")
                     expect(page.locator(".session-count")).to_have_text(f"{count + 1} sessions")
-                    assert page.locator('.tile[data-id="focus-test"] .completion-badge').count() == 0
+                    assert page.locator('.tile[data-id="focus-test"] .completion-badge').count() == 1
+                    page.locator('.tile[data-id="focus-test"] .dismiss-agent').click()
+                    expect(page.locator('.tile[data-id="focus-test"]')).to_have_count(0)
+                    expect(page.locator(".session-count")).to_have_text(f"{count} sessions")
                     page.locator('.usage-meter[data-provider="cursor"]').click()
                     expect(section).to_have_attribute("data-mode", "usage")
                     expect(cursor).to_have_attribute("data-selected", "true")
@@ -697,5 +702,92 @@ def test_settings_page_is_always_available(
                 page.locator('#v-settings [data-page="agents"]').click()
                 page.locator('#pager button[data-view="agents"]').click()
                 page.wait_for_selector(".usage-grab")
+            finally:
+                browser.close()
+
+
+@pytest.mark.parametrize("width,height", [(800, 480), (1280, 720), (360, 640)])
+def test_nested_work_drawers_keep_parent_geometry_and_worker_identity(
+    tmp_path: Path,
+    width: int,
+    height: int,
+    ) -> None:
+    """
+    Exercise fixed-height families, nested commands, live updates, and independent dismissal.
+
+    Args:
+        tmp_path (Path): Isolated configuration directory.
+        width (int): Browser viewport width in pixels.
+        height (int): Browser viewport height in pixels.
+
+    Returns:
+        None: Parent geometry survives children and drawer toggles without duplicate workers.
+    """
+    from playwright.sync_api import sync_playwright, expect
+
+    with local_server(tmp_path / "config.yaml", mock=True, port=0) as url:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": width, "height": height})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            try:
+                page.goto(url)
+                page.locator(".tile").first.wait_for()
+                with httpx.Client(base_url=url, trust_env=False) as client:
+                    for sid in ("family-a", "family-b"):
+                        client.post("api/agents/event", json={"session_id": sid, "event": "UserPromptSubmit",
+                                                              "agent": "claude", "name": "piDeck"})
+                    parent = page.locator('.tile[data-id="family-a"]')
+                    parent.wait_for()
+                    initial = parent.bounding_box()["height"]
+                    for i in range(5):
+                        client.post("api/agents/event", json={"session_id": f"worker-{i}", "event": "PreToolUse",
+                            "agent": "claude", "parent_id": "family-a" if i < 4 else "worker-0",
+                            "name": "worker", "tool_name": "PowerShell", "tool_use_id": str(i)})
+                    expect(parent.locator(".agent-worker")).to_have_count(5)
+                    assert parent.bounding_box()["height"] == initial
+                    area = parent.locator(".worker-space").bounding_box()
+                    toolbar = parent.locator(".workers-toggle").bounding_box()
+                    assert toolbar["y"] + toolbar["height"] <= area["y"]
+                    assert area["y"] + area["height"] <= parent.bounding_box()["y"] + initial
+                    assert parent.locator(".agent-worker canvas").first.evaluate("el => el.getBoundingClientRect().width") == 24
+                    assert page.locator('.tile[data-id="family-b"]').bounding_box()["height"] == initial
+                    assert page.locator('.tile[data-id^="worker-"]').count() == 0
+                    expect(parent.locator(".workers-toggle")).to_contain_text("5 subagents · 5 active")
+                    assert parent.locator('[data-id="worker-0"] .meta').inner_text() == "Running command"
+                    assert parent.locator('[data-id="worker-4"]').get_attribute("data-parent-id") == "worker-0"
+                    drawer = parent.locator(".workers")
+                    assert drawer.evaluate("el => el.scrollHeight > el.clientHeight")
+                    drawer.evaluate("el => el.scrollTop = 30")
+                    client.post("api/agents/event", json={"session_id": "worker-0", "event": "PostToolUse", "tool_use_id": "0"})
+                    expect(parent.locator('[data-id="worker-0"] .meta')).to_have_text("Working")
+                    assert drawer.evaluate("el => el.scrollTop") == 30
+                    toggle = parent.locator(".workers-toggle")
+                    toggle.focus()
+                    page.keyboard.press("Enter")
+                    expect(toggle).to_have_attribute("aria-expanded", "false")
+                    assert parent.bounding_box()["height"] == initial
+                    page.keyboard.press("Space")
+                    expect(toggle).to_have_attribute("aria-expanded", "true")
+                    parent.locator('[data-id="worker-1"] .dismiss-agent').click()
+                    expect(parent.locator(".agent-worker")).to_have_count(4)
+                    assert parent.count() == 1
+                    assert page.locator('.tile[data-id="family-b"]').count() == 1
+                    assert parent.bounding_box()["height"] == initial
+                    page.evaluate("""() => {
+                        const tile = document.querySelector('.tile[data-id="family-a"]');
+                        const m = motions.get(tile.dataset.id); m.thinkAt = 0; m.blinkAt = 0;
+                        animateTiles();
+                    }""")
+                    expect(parent.locator(":scope > .parent-heading .thinking")).to_be_visible()
+                    bubble = parent.locator(":scope > .parent-heading .thinking")
+                    assert bubble.evaluate("el => getComputedStyle(el).backgroundColor") == "rgba(0, 0, 0, 0)"
+                    assert bubble.locator("i").first.evaluate("el => getComputedStyle(el).backgroundColor") == "rgb(255, 255, 255)"
+                    assert parent.locator(":scope > .parent-heading .laptop").is_visible()
+                    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+                assert not errors
+                Path("test-results/browser").mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=f"test-results/browser/work-drawer-{width}x{height}.png")
             finally:
                 browser.close()

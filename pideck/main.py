@@ -83,7 +83,7 @@ def create_app(
             location.
         mock (Optional[bool]): Whether generated example data replaces live provider connections.
         lively (bool): Whether the demo should continue emitting random changes after startup.
-        prime (bool): Whether existing local sessions are discovered when the server starts.
+        prime (bool): Whether sanitized hook events and verified local measurements are monitored.
         desktop (bool): Whether an owned native window exposes authenticated desktop setup actions.
 
     Returns:
@@ -99,7 +99,8 @@ def create_app(
     secs = float(cfg["alerts"]["seconds"])
 
     hub = Hub()
-    agents = AgentRegistry(hub, mods["agents"], secs)
+    agents = AgentRegistry(hub, mods["agents"], secs,
+                           config_file.with_name("agent-dismissals.json") if config_file.is_file() and not cfg["mock"] else None)
     feed = SlackFeed(hub, mods["slack"], secs)
     spotify = Spotify(hub, mods["spotify"])
     access = Access(demo=bool(cfg["mock"]))
@@ -154,30 +155,11 @@ def create_app(
         if mods["agents"]["enabled"]:
             tasks.append(asyncio.create_task(agents.prune_forever()))
             if prime and not cfg["mock"]:
-                from .local_prime import launch_prime
+                from .local_prime import monitor
 
-                async def _refresh_prime() -> None:
-                    """
-                    Reload local sessions and allowance bars until the server stops.
-
-                    The first pass forces a Claude usage fetch so opening piDeck after Claude still
-                    refreshes bars despite the normal 30-minute throttle.
-
-                    Returns:
-                        None: No value is returned.
-                    """
-                    force_claude = True
-                    while True:
-                        await asyncio.to_thread(
-                            launch_prime,
-                            getattr(app.state, "prime_url",
-                                    f"http://127.0.0.1:{cfg['server']['port']}/"),
-                            force_claude,
-                        )
-                        force_claude = False
-                        await asyncio.sleep(900)
-
-                tasks.append(asyncio.create_task(_refresh_prime()))
+                tasks.append(asyncio.create_task(monitor(
+                    agents, lambda: getattr(app.state, "prime_url", f"http://127.0.0.1:{cfg['server']['port']}/"),
+                )))
         yield
         for t in tasks:
             t.cancel()
@@ -402,8 +384,7 @@ def create_app(
         Returns:
             dict[str, Any]: Success flag after the session removal has been broadcast.
         """
-        agents.agents.pop(session_id, None)
-        await agents._publish()
+        await agents.dismiss(session_id)
         return {"ok": True}
 
     @app.post("/api/spotify/{action}", dependencies=[Depends(require_access)])

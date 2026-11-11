@@ -2,7 +2,7 @@
 
 Claude Code / Codex / Cursor hook -> piDeck. Stdlib only and never allowed to break your session.
 
-Two ways in, same script:
+Supported inputs:
 
   Hooks (Claude Code and Codex CLI):  the tool pipes a JSON payload to stdin
       (session_id, cwd, hook_event_name, ...). Tell us which tool it is with --source:
@@ -22,30 +22,28 @@ and registers this script. Environment variables, if set, override that file:
   PIDECK_HOOK_TOKEN      event-only credential; never use the display administrator token
   PIDECK_CONFIG          path to a different hook.json
   PIDECK_NAME            tile label override (default: the project folder name)
-  PIDECK_CONTEXT_WINDOW  tokens for the ctx% estimate (default 200000; Claude Code only)
   CODEX_HOME             Codex data directory (default ~/.codex), used to find session metrics
   PIDECK_SEND_MESSAGES   set to 1 to also send a 200-character snippet of the assistant's last reply
-                         (off by default: it crosses your network, and the server may be plain HTTP).
+                         (off by default; remote authenticated displays require HTTPS).
                          Or set "send_messages": true in ~/.config/pideck/hook.json.
 
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Iterator, Mapping
 
 import json
 import csv
 import io
 import ipaddress
 import math
+import hashlib
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 from functools import lru_cache
 from urllib.parse import urlsplit
 import urllib.error
@@ -59,22 +57,12 @@ CURSOR_EVENTS = {
     "beforeSubmitPrompt": "UserPromptSubmit",
     "preToolUse": "PreToolUse",
     "postToolUse": "PostToolUse",
-    "postToolUseFailure": "PostToolUse",
+    "postToolUseFailure": "PostToolUseFailure",
     "stop": "Stop",
     "sessionEnd": "SessionEnd",
-    "preCompact": "UsageUpdate",
     "subagentStart": "UserPromptSubmit",
     "subagentStop": "Stop",
 }
-PRIME_LIMIT = 24
-# File mtime younger than this → primed tile is "working"; older (but still inside the
-# discover window) → "idle". Live hooks use EVENT_STATE instead of this threshold.
-WORKING_AGE_SECONDS = 120
-# Default discover/hide window: sessions with no real filesystem activity older than this
-# are not primed. Server prune uses the same 24h intent via activity_at / stale_hours.
-DEFAULT_PRIME_HOURS = 24
-
-
 # --- Private files and authenticated transport ---
 
 
@@ -322,7 +310,7 @@ def codex_metrics(
     env: Mapping[str, str],
     ) -> dict[str, Any]:
     """
-    Read context and account usage from this Codex session's latest token events.
+    Read context from the latest reported Codex token event; account limits use app-server.
 
     Args:
         payload (dict[str, Any]): Hook or notify payload, optionally containing transcript_path.
@@ -330,8 +318,7 @@ def codex_metrics(
             directory.
 
     Returns:
-        dict[str, Any]: Available context_pct and usage fields. Missing data is never treated as
-            zero.
+        dict[str, Any]: Available context percentage. Missing data is never treated as zero.
     """
     path = payload.get("transcript_path")
     if not path:
@@ -360,56 +347,9 @@ def codex_metrics(
             if (isinstance(used, (int, float)) and isinstance(window, (int, float))
                     and math.isfinite(used) and math.isfinite(window) and window > 0 and used >= 0):
                 result["context_pct"] = round(min(100.0, used * 100.0 / window), 1)
-        limits = data.get("rate_limits") or {}
-        if ("usage" not in result and isinstance(limits, dict) and limits
-                and limits.get("limit_id") in (None, "codex")):
-            result["usage"] = {
-                key: usage_window(limits.get(key), "used_percent", limits[key].get("window_minutes"))
-                if isinstance(limits.get(key), dict) else None
-                for key in ("primary", "secondary")
-            }
-        if "context_pct" in result and "usage" in result:
+        if "context_pct" in result:
             break
     return result
-
-
-def context_pct(
-    transcript_path: str | Path,
-    window: float,
-    ) -> float | None:
-    """
-    Best-effort (Claude Code transcripts): latest assistant prompt tokens / window. None if unknown.
-
-    Args:
-        transcript_path (str | Path): Local session transcript to inspect for recent context usage.
-        window (float): Token capacity used as the context-percentage denominator.
-
-    Returns:
-        float | None: Estimated context-used percentage capped at 100, or None when transcript usage
-            is unavailable.
-    """
-    try:
-        with open(transcript_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - TAIL_BYTES))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-        for line in reversed(lines):
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue  # first line of the tail may be cut off
-            usage = (rec.get("message") or {}).get("usage")
-            if rec.get("type") == "assistant" and usage:
-                used = (
-                    usage.get("input_tokens", 0)
-                    + usage.get("cache_read_input_tokens", 0)
-                    + usage.get("cache_creation_input_tokens", 0)
-                )
-                return round(min(100.0, used * 100.0 / window), 1)
-    except Exception:
-        pass
-    return None
 
 
 def _saved(
@@ -427,7 +367,7 @@ def _saved(
     """
     path = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8-sig") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -471,8 +411,12 @@ def build_event(
         dict[str, Any] | None: A piDeck event containing only the selected display fields and
             metrics.
     """
-    if source == "cursor":
+    if source == "cursor" or payload.get("hook_event_name") in CURSOR_EVENTS:
         return build_cursor_event(payload, env)
+    if payload.get("hook_event_name") == "Notification" and payload.get("notification_type") not in {
+        "permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input",
+    }:
+        return None
     ev = {
         "session_id": payload.get("session_id") or "unknown",
         "event": payload.get("hook_event_name"),
@@ -482,24 +426,56 @@ def build_event(
     if env.get("PIDECK_NAME"):
         ev["name"] = env["PIDECK_NAME"]
     hook_name = payload.get("hook_event_name")
-    if hook_name in ("SubagentStart", "SubagentStop") and payload.get("agent_id"):
+    if payload.get("agent_id"):
         parent = payload.get("session_id") or "unknown"
         ev["parent_id"] = str(parent)[:128]
-        ev["session_id"] = (str(parent) + ":" + _token(payload["agent_id"]))[:128]
-        ev["event"] = "Stop" if hook_name == "SubagentStop" else "UserPromptSubmit"
+        ev["session_id"] = child_session_id(str(parent) + ":", payload["agent_id"])
+        if hook_name in ("SubagentStart", "SubagentStop"):
+            ev["event"] = "Stop" if hook_name == "SubagentStop" else "UserPromptSubmit"
         if payload.get("agent_type"):
             ev["name"] = str(payload["agent_type"]).strip()[:64]
     # Notification carries `message`; Codex's Stop carries `last_assistant_message`
     msg = (payload.get("message") or payload.get("last_assistant_message")) if wants_messages(env) else None
     if msg:
         ev["message"] = " ".join(str(msg).split())[:200]
-    if source == "codex" and ev["event"] != "SessionEnd":
+    if source == "codex" and ev["event"] != "SessionEnd" and not ev.get("parent_id"):
         ev.update(codex_metrics(payload, env))
-    if source == "claude" and payload.get("transcript_path") and ev["event"] != "SessionEnd":
-        pct = context_pct(payload["transcript_path"], float(env.get("PIDECK_CONTEXT_WINDOW", 200000)))
-        if pct is not None:
-            ev["context_pct"] = pct
+    ev.update(lifecycle_fields(payload))
+    if ev.get("parent_id"):
+        # Claude's child hooks carry the session-wide background list, including
+        # the child itself and its siblings. It is not a list of this child's jobs.
+        ev.pop("background_tasks", None)
+        if hook_name == "SubagentStop":
+            ev["background_tasks"] = []
     return ev
+
+
+def lifecycle_fields(
+    payload: dict[str, Any],
+    ) -> dict[str, Any]:
+    """
+    Copy tool identities and reported background jobs without their commands or descriptions.
+
+    Args:
+        payload (dict[str, Any]): Provider lifecycle payload received over standard input.
+
+    Returns:
+        dict[str, Any]: Bounded identifiers and an authoritative job list when one was reported.
+    """
+    fields = {}
+    for key in ("tool_use_id", "turn_id"):
+        if isinstance(payload.get(key), str):
+            fields[key] = _token(payload[key], 128)
+    if isinstance(payload.get("tool_name"), str):
+        fields["tool_name"] = _token(payload["tool_name"], 64)
+    tasks = payload.get("background_tasks")
+    if isinstance(tasks, list):
+        fields["background_tasks"] = [
+            _token(task["id"], 128) for task in tasks[:64]
+            if isinstance(task, dict) and isinstance(task.get("id"), str)
+            and task.get("status") not in {"completed", "failed", "killed", "aborted"}
+        ]
+    return fields
 
 
 def _token(
@@ -521,27 +497,53 @@ def _token(
 
 def cursor_subagent_ids(
     payload: dict[str, Any],
+    env: Mapping[str, str],
     ) -> tuple[str | None, str | None]:
     """
     Session and parent ids for a Cursor subagent, without its task text.
 
     Args:
         payload (dict[str, Any]): subagentStart or subagentStop input.
+        env (Mapping[str, str]): Environment selecting local provider metadata.
 
     Returns:
         tuple[str | None, str | None]: (session_id, parent_id). Either is None when the payload has
             no identity.
     """
+    try:
+        from .runtime import cursor_child_identity
+    except ImportError:
+        from runtime import cursor_child_identity
+    identity = cursor_child_identity(str(payload.get("conversation_id") or ""), env)
+    if identity:
+        parent, sub = identity
+        return child_session_id("cursor:sub:", sub), ("cursor:" + parent)[:128]
     parent = payload.get("parent_conversation_id") or payload.get("conversation_id")
     sub = payload.get("subagent_id") or payload.get("tool_call_id")
     if not sub and payload.get("agent_transcript_path"):
         sub = Path(str(payload["agent_transcript_path"])).stem
-    if not sub and parent and payload.get("subagent_type"):
-        sub = _token(parent, 40) + ":" + _token(payload.get("subagent_type"), 24)
     if not sub:
         return None, None
     parent_id = ("cursor:" + _token(parent, 80))[:128] if parent else None
-    return ("cursor:sub:" + _token(sub, 80))[:128], parent_id
+    return child_session_id("cursor:sub:", sub), parent_id
+
+
+def child_session_id(
+    prefix: str,
+    identity: Any,
+    ) -> str:
+    """
+    Build a bounded child ID without dropping distinguishing suffixes of long identities.
+
+    Args:
+        prefix (str): Parent namespace or provider-specific child prefix.
+        identity (Any): Provider-reported stable child or spawning tool identity.
+
+    Returns:
+        str: Original compact identity, or a deterministic SHA-256 identity within 128 characters.
+    """
+    value = prefix + _token(identity, 4096)
+    return value if len(value) <= 128 else prefix[:50] + hashlib.sha256(value.encode()).hexdigest()
 
 
 def cursor_hook_response(
@@ -622,13 +624,15 @@ def build_cursor_event(
         env (Mapping[str, str]): Environment mapping supporting the PIDECK_NAME tile label override.
 
     Returns:
-        dict[str, Any] | None: A piDeck lifecycle or context-only event, or None for unrelated
-            hooks. Context is cleared on later activity because preCompact is only a snapshot.
+        dict[str, Any] | None: A piDeck lifecycle event with available local context and job IDs,
+            or None for unrelated hooks and obsolete pre-compaction snapshots.
             Public summary/title fields may label the tile; prompts and task bodies do not.
     """
     hook_name = payload.get("hook_event_name")
     event = CURSOR_EVENTS.get(hook_name)
-    sub_session, parent_id = cursor_subagent_ids(payload) if hook_name in ("subagentStart", "subagentStop") else (None, None)
+    sub_session, parent_id = cursor_subagent_ids(payload, env)
+    if hook_name in ("subagentStart", "subagentStop") and not sub_session:
+        return None  # Missing identity cannot safely start or finish a particular child.
     sid = payload.get("conversation_id") or payload.get("session_id") or (sub_session or "").removeprefix("cursor:")
     if event is None or not (sid or sub_session):
         return None
@@ -638,10 +642,11 @@ def build_cursor_event(
         "event": event,
         "agent": "cursor",
         "cwd": payload.get("cwd") or (roots[0] if roots else None),
-        "context_pct": None,
     }
     if parent_id:
         ev["parent_id"] = parent_id
+    if sub_session and parent_id != "cursor:" + str(sid):
+        ev["provider_session_id"] = str(sid)[:128]
     if hook_name in ("subagentStart", "subagentStop") and payload.get("subagent_type"):
         ev["name"] = str(payload["subagent_type"]).strip()[:64]
     title = display_title(payload.get("summary"), payload.get("title"))
@@ -656,18 +661,23 @@ def build_cursor_event(
         detail = cursor_detail(payload)
         if detail:
             ev["detail"] = detail
-    if event == "UsageUpdate":
-        pct = payload.get("context_usage_percent")
-        if isinstance(pct, (int, float)) and math.isfinite(pct) and 0 <= pct <= 100:
-            ev["context_pct"] = pct
-    elif event == "Stop":
+    if event == "Stop":
         status = payload.get("status")
         if status == "error":
             ev["state"] = "error"
         elif status == "aborted":
-            ev["state"] = "idle"
+            ev["event"] = "Interrupt"
     elif payload.get("hook_event_name") == "postToolUseFailure" and payload.get("failure_type") == "permission_denied":
         ev["state"] = "waiting"
+    ev.update(lifecycle_fields(payload))
+    if event != "SessionEnd" and (not sub_session or ev.get("provider_session_id")):
+        try:
+            from .runtime import cursor_metrics
+        except ImportError:
+            from runtime import cursor_metrics
+        ev.update(cursor_metrics(str(sid), env))
+    if hook_name == "stop" and ev.get("event") == "Stop" and "state" not in ev and "background_tasks" not in ev:
+        ev["state"] = "unknown"  # A response end alone cannot confirm that background tools ended.
     return ev
 
 
@@ -695,6 +705,8 @@ def build_notify_event(
         "cwd": payload.get("cwd"),
         "agent": "codex",
     }
+    if payload.get("turn-id"):
+        ev["turn_id"] = str(payload["turn-id"])[:128]
     if env.get("PIDECK_NAME"):
         ev["name"] = env["PIDECK_NAME"]
     if payload.get("last-assistant-message") and wants_messages(env):
@@ -731,32 +743,6 @@ def statusline_context(
     if not math.isfinite(used) or used < 0:
         return None
     return round(min(100.0, used * 100.0 / float(size)), 1)
-
-
-def claude_context_window(
-    path: str | Path | None,
-    ) -> int:
-    """
-    Read the context-window size recorded in a Claude transcript.
-
-    Args:
-        path (str | Path | None): Session JSONL file. Only the trailing bytes are scanned.
-
-    Returns:
-        int: The recorded window, or 200000 when the file does not name one.
-    """
-    try:
-        with open(path, "rb") as stream:
-            stream.seek(0, os.SEEK_END)
-            stream.seek(max(0, stream.tell() - TAIL_BYTES))
-            raw = stream.read().decode("utf-8", "ignore")
-    except OSError:
-        return 200000
-    match = re.search(r'"(?:context_window_size|contextWindow)"\s*:\s*(\d+)', raw)
-    if not match:
-        return 200000
-    size = int(match.group(1))
-    return size if 1000 <= size <= 2_000_000 else 200000
 
 
 def build_statusline_event(
@@ -867,888 +853,6 @@ def load_settings(
     }
 
 
-# --- Cached allowance samples ---
-
-
-def usage_cache_path(
-    env: Mapping[str, str],
-    ) -> Path:
-    """
-    Where the last account-usage sample is kept so a later launch can show it.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping. PIDECK_CONFIG selects a different hook
-            directory.
-
-    Returns:
-        Path: The cache path beside hook.json. The file holds percentages only.
-    """
-    saved = env.get("PIDECK_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "pideck", "hook.json")
-    return Path(saved).parent / "usage-cache.json"
-
-
-def remember_usage(
-    ev: dict[str, Any],
-    env: Mapping[str, str],
-    ) -> None:
-    """
-    Store one provider's allowance sample for the next piDeck launch.
-
-    Args:
-        ev (dict[str, Any]): Event that may contain an agent name and a usage object.
-        env (Mapping[str, str]): Environment mapping used to locate the cache.
-
-    Returns:
-        None: No value is returned.
-    """
-    usage = ev.get("usage") if isinstance(ev, dict) else None
-    agent = ev.get("agent") if isinstance(ev, dict) else None
-    if agent not in ("claude", "codex", "cursor") or not isinstance(usage, dict):
-        return
-    path = usage_cache_path(env)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        current = {}
-        if path.is_file():
-            current = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(current, dict):
-            current = {}
-        previous = current.get(agent) if isinstance(current.get(agent), dict) else {}
-        entry = {"usage": usage, "updated_at": time.time()}
-        # Replaying a cached sample must not look like a fresh provider fetch.
-        if str(ev.get("session_id") or "").startswith("usage:"):
-            if previous.get("fetched_at"):
-                entry["fetched_at"] = previous["fetched_at"]
-        else:
-            entry["fetched_at"] = entry["updated_at"]
-        current[agent] = entry
-        path.write_text(json.dumps(current), encoding="utf-8")
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except (OSError, ValueError):
-        return
-
-
-def cached_usage_events(
-    env: Mapping[str, str],
-    ) -> list[dict[str, Any]]:
-    """
-    Turn the saved allowance sample into usage-only events.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to locate the cache.
-
-    Returns:
-        list[dict[str, Any]]: One UsageUpdate per cached provider. An unreadable cache yields
-            nothing.
-    """
-    try:
-        data = json.loads(usage_cache_path(env).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    if not isinstance(data, dict):
-        return []
-    events = []
-    for agent in ("claude", "codex", "cursor"):
-        item = data.get(agent)
-        if isinstance(item, dict) and isinstance(item.get("usage"), dict):
-            events.append({
-                "session_id": "usage:" + agent,
-                "event": "UsageUpdate",
-                "agent": agent,
-                "usage": item["usage"],
-            })
-    return events
-
-
-def _load_cache(
-    env: Mapping[str, str],
-    ) -> dict[str, Any]:
-    """
-    Read the percentage cache, or an empty object when it is missing.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to locate the cache.
-
-    Returns:
-        dict[str, Any]: The cache object. A missing or unreadable file yields an empty dict.
-    """
-    try:
-        data = json.loads(usage_cache_path(env).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def stamp_fetch(
-    env: Mapping[str, str],
-    agent: str,
-    when: float,
-    ) -> None:
-    """
-    Remember when a provider last returned a usable allowance sample.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to locate the cache.
-        agent (str): Provider name, one of claude, codex, or cursor.
-        when (float): Unix time of the successful fetch.
-
-    Returns:
-        None: No value is returned.
-    """
-    path = usage_cache_path(env)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        current = _load_cache(env)
-        entry = dict(current.get(agent) if isinstance(current.get(agent), dict) else {})
-        entry["fetched_at"] = when
-        current[agent] = entry
-        path.write_text(json.dumps(current), encoding="utf-8")
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        return
-
-
-def note_fetch(
-    env: Mapping[str, str],
-    agent: str,
-    note: str,
-    ) -> None:
-    """
-    Record why an account-usage request produced no bars. Never store a token or body.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to locate the cache.
-        agent (str): Provider name.
-        note (str): Short status such as http_401 or no_sign_in.
-
-    Returns:
-        None: No value is returned.
-    """
-    path = usage_cache_path(env)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        current = _load_cache(env)
-        entry = dict(current.get(agent) if isinstance(current.get(agent), dict) else {})
-        entry["note"] = str(note)[:40]
-        current[agent] = entry
-        path.write_text(json.dumps(current), encoding="utf-8")
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        return
-
-
-def fetched_at(
-    env: Mapping[str, str],
-    agent: str,
-    ) -> float:
-    """
-    When this provider was last asked for account usage.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to locate the cache.
-        agent (str): Provider name.
-
-    Returns:
-        float: A Unix time, or 0 when this provider has not been asked.
-    """
-    entry = _load_cache(env).get(agent)
-    if not isinstance(entry, dict):
-        return 0
-    try:
-        return float(entry.get("fetched_at") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-# --- Provider allowance normalization ---
-
-
-def _window(
-    percent: Any,
-    minutes: int,
-    resets_at: Any,
-    label: str,
-    ) -> dict[str, Any] | None:
-    """
-    Build one allowance window, or None when the percent is unusable.
-
-    Args:
-        percent (Any): Percent used, already numeric.
-        minutes (int): Window length in minutes.
-        resets_at (Any): Unix reset time, or None.
-        label (str): Short bar caption such as Included or API.
-
-    Returns:
-        dict[str, Any] | None: A piDeck usage window, or None.
-    """
-    window = usage_window({"used_percentage": percent, "resets_at": resets_at}, "used_percentage", minutes)
-    if window and label:
-        window["label"] = label
-    return window
-
-
-def _field(
-    source: Any,
-    *names: str,
-    ) -> Any:
-    """
-    Return the first present value among several spellings of one field.
-
-    Args:
-        source (Any): Object that may hold the field.
-        *names (str): Candidate keys, preferred name first.
-
-    Returns:
-        Any: First present non-null value matching a supplied field name, otherwise None.
-    """
-    if not isinstance(source, dict):
-        return None
-    for name in names:
-        if name in source and source[name] is not None:
-            return source[name]
-    return None
-
-
-def cursor_usage_from_body(
-    payload: Any,
-    ) -> dict[str, Any] | None:
-    """
-    Read Cursor's current-period usage payload down to two public bars.
-
-    Args:
-        payload (Any): JSON object from DashboardService/GetCurrentPeriodUsage.
-
-    Returns:
-        dict[str, Any] | None: A usage object with Included and API windows, or None when no percent
-            is present.
-    """
-    if not isinstance(payload, dict):
-        return None
-    plan = _field(payload, "planUsage", "plan_usage")
-    if not isinstance(plan, dict):
-        individual = _field(payload, "individualUsage", "individual_usage")
-        plan = _field(individual, "plan") if isinstance(individual, dict) else None
-    if not isinstance(plan, dict):
-        plan = {}
-    reset = _field(payload, "billingCycleEnd", "billing_cycle_end")
-    # The dashboard sentence "N% of your included usage" is included spend over the plan limit.
-    # totalPercentUsed is a different internal mix and is only a fallback.
-    limit = _field(plan, "limit")
-    spent = _field(plan, "includedSpend", "included_spend")
-    if isinstance(limit, (int, float)) and isinstance(spent, (int, float)) and limit > 0 and spent >= 0:
-        included = min(100.0, spent * 100.0 / limit)
-    else:
-        included = _field(plan, "totalPercentUsed", "total_percent_used")
-    api = _field(plan, "apiPercentUsed", "api_percent_used")
-    auto = _field(plan, "autoPercentUsed", "auto_percent_used")
-    primary = _window(included if included is not None else auto, 43200, reset, "Included")
-    secondary_pct = api if api is not None else (auto if included is not None else None)
-    secondary = _window(secondary_pct, 43200, reset, "API" if api is not None else "Auto")
-    if primary is None and secondary is None:
-        return None
-    return {"primary": primary, "secondary": secondary}
-
-
-# --- Cursor sign-in and allowance requests ---
-
-
-def cursor_state_db(
-    env: Mapping[str, str],
-    ) -> Path:
-    """
-    Locate Cursor's local state database without opening it.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping. CURSOR_STATE_DB overrides the platform path.
-
-    Returns:
-        Path: Path to state.vscdb.
-    """
-    override = env.get("CURSOR_STATE_DB")
-    if override:
-        return Path(override)
-    if sys.platform == "win32":
-        base = Path(env.get("APPDATA") or Path.home() / "AppData" / "Roaming")
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return base / "Cursor" / "User" / "globalStorage" / "state.vscdb"
-
-
-def read_cursor_value(
-    env: Mapping[str, str],
-    key: str,
-    ) -> str | None:
-    """
-    Read one Cursor sign-in value. Callers must not log or forward it.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find state.vscdb.
-        key (str): ItemTable key, such as cursorAuth/accessToken.
-
-    Returns:
-        str | None: The stored string, or None when the database or the key is unavailable.
-    """
-    path = cursor_state_db(env)
-    if not path.is_file():
-        return None
-    try:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
-        try:
-            row = conn.execute(
-                "select value from ItemTable where key = ? limit 1",
-                (key,),
-            ).fetchone()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return None
-    if not row or row[0] in (None, ""):
-        return None
-    value = row[0].decode("utf-8", "ignore") if isinstance(row[0], bytes) else str(row[0]).strip()
-    if value.startswith('"'):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            return None
-    return value if isinstance(value, str) and value else None
-
-
-def read_cursor_token(
-    env: Mapping[str, str],
-    ) -> str | None:
-    """
-    Read the local Cursor access token. Callers must not log or forward it.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find state.vscdb.
-
-    Returns:
-        str | None: The access token, or None when the database or the key is unavailable.
-    """
-    return read_cursor_value(env, "cursorAuth/accessToken")
-
-
-# Cursor's desktop access token expires after about an hour. This is the public client id it refreshes with.
-CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
-
-
-def refresh_cursor_token(
-    env: Mapping[str, str],
-    opener: Callable[..., Any] | None,
-    ) -> tuple[str | None, str]:
-    """
-    Exchange Cursor's refresh token for a new access token. Nothing is written back.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find state.vscdb.
-        opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen.
-
-    Returns:
-        tuple[str | None, str]: The new access token and an empty note, or None and a short reason.
-    """
-    refresh = read_cursor_value(env, "cursorAuth/refreshToken")
-    if not refresh:
-        return None, "no_refresh"
-    request = urllib.request.Request(
-        "https://api2.cursor.sh/oauth/token",
-        data=json.dumps({
-            "grant_type": "refresh_token",
-            "client_id": CURSOR_CLIENT_ID,
-            "refresh_token": refresh,
-        }).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
-    try:
-        with opener(request, timeout=5) as response:
-            body = json.loads(response.read().decode("utf-8", "ignore"))
-    except urllib.error.HTTPError as exc:
-        return None, "refresh_http_" + str(exc.code)
-    except (OSError, ValueError) as exc:
-        return None, "refresh_bad_json" if isinstance(exc, ValueError) else "refresh_unreachable"
-    if not isinstance(body, dict) or body.get("shouldLogout") is True:
-        return None, "refresh_logout"
-    token = body.get("access_token") or body.get("accessToken")
-    if not isinstance(token, str) or not token:
-        return None, "refresh_empty"
-    return token, ""
-
-
-def _cursor_usage_request(
-    token: str,
-    ) -> urllib.request.Request:
-    """
-    Build the current-period usage request. The token stays in the header only.
-
-    Args:
-        token (str): Cursor access token.
-
-    Returns:
-        urllib.request.Request: The POST request.
-    """
-    return urllib.request.Request(
-        "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
-        data=b"{}",
-        headers={
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
-            "Connect-Protocol-Version": "1",
-        },
-        method="POST",
-    )
-
-
-def fetch_cursor_usage(
-    env: Mapping[str, str],
-    opener: Callable[..., Any] | None = None,
-    ) -> dict[str, Any] | None:
-    """
-    Ask Cursor's usage service for percentages. The token is not included in the result.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find the local sign-in.
-        opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen, for tests.
-
-    Returns:
-        dict[str, Any] | None: A usage-only Cursor event, or None when the sign-in or the service is
-            unavailable.
-    """
-    open_url = opener or safe_open
-    token = read_cursor_token(env)
-    if not token:
-        note_fetch(env, "cursor", "no_sign_in")
-        return None
-    request = _cursor_usage_request(token)
-    try:
-        with open_url(request, timeout=5) as response:
-            body = json.loads(response.read().decode("utf-8", "ignore"))
-    except urllib.error.HTTPError as exc:
-        if exc.code != 401:
-            note_fetch(env, "cursor", "http_" + str(exc.code))
-            return None
-        token, reason = refresh_cursor_token(env, open_url)
-        if not token:
-            note_fetch(env, "cursor", reason)
-            return None
-        request = _cursor_usage_request(token)
-        try:
-            with open_url(request, timeout=5) as response:
-                body = json.loads(response.read().decode("utf-8", "ignore"))
-        except urllib.error.HTTPError as retry:
-            note_fetch(env, "cursor", "http_" + str(retry.code))
-            return None
-        except (OSError, ValueError) as retry:
-            note_fetch(env, "cursor", "bad_json" if isinstance(retry, ValueError) else type(retry).__name__)
-            return None
-    except (OSError, ValueError) as exc:
-        note_fetch(env, "cursor", "bad_json" if isinstance(exc, ValueError) else type(exc).__name__)
-        return None
-    usage = cursor_usage_from_body(body)
-    if not usage:
-        note_fetch(env, "cursor", "unrecognized")
-        return None
-    event = {"session_id": "usage:cursor", "event": "UsageUpdate", "agent": "cursor", "usage": usage}
-    remember_usage(event, env)
-    return event
-
-
-# Claude's usage endpoint rate-limits a token after a short burst, so a launch asks at most twice an hour.
-CLAUDE_USAGE_INTERVAL = 1800
-
-
-# --- Claude sign-in and allowance requests ---
-
-
-def claude_credentials_path(
-    env: Mapping[str, str],
-    ) -> Path:
-    """
-    Locate the Claude sign-in file without opening it.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping. CLAUDE_CREDENTIALS overrides the home path.
-
-    Returns:
-        Path: Path to the credentials file.
-    """
-    override = env.get("CLAUDE_CREDENTIALS")
-    if override:
-        return Path(override)
-    home = Path(env.get("PIDECK_HOME") or Path.home())
-    return home / ".claude" / ".credentials.json"
-
-
-def read_claude_token(
-    env: Mapping[str, str],
-    ) -> str | None:
-    """
-    Read the local Claude access token. Callers must not log or forward it.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find the credentials file.
-
-    Returns:
-        str | None: The access token, or None when the file or the sign-in is unavailable.
-    """
-    path = claude_credentials_path(env)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    oauth = data.get("claudeAiOauth") if isinstance(data.get("claudeAiOauth"), dict) else data
-    token = oauth.get("accessToken") or oauth.get("access_token")
-    if isinstance(token, str) and token:
-        return token
-    fallback = env.get("CLAUDE_CODE_OAUTH_TOKEN")
-    return fallback if isinstance(fallback, str) and fallback else None
-
-
-def claude_sign_in_note(
-    env: Mapping[str, str],
-    ) -> str:
-    """
-    Why the Claude sign-in could not be read, without including its contents.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find the credentials file.
-
-    Returns:
-        str: A short note such as missing_file, bad_json, or the key names that were present.
-    """
-    path = claude_credentials_path(env)
-    if not path.is_file():
-        return "missing_file"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except OSError:
-        return "unreadable"
-    except ValueError:
-        return "bad_json"
-    if not isinstance(data, dict):
-        return "bad_json"
-    oauth = data.get("claudeAiOauth")
-    source = oauth if isinstance(oauth, dict) else data
-    token = source.get("accessToken") if isinstance(source, dict) else None
-    if token is None:
-        kind = "missing"
-    elif isinstance(token, str):
-        kind = "empty" if not token else "str"
-    else:
-        kind = type(token).__name__
-    return ("token_" + kind)[:40]
-
-
-def claude_usage_from_body(
-    payload: Any,
-    ) -> dict[str, Any] | None:
-    """
-    Read Claude's 5-hour and weekly utilization down to two public bars.
-
-    Args:
-        payload (Any): JSON object with five_hour and seven_day utilization.
-
-    Returns:
-        dict[str, Any] | None: A usage object with 5h and Weekly windows, or None when both are
-            missing.
-    """
-    if not isinstance(payload, dict):
-        return None
-    primary = usage_window(payload.get("five_hour"), "utilization", 300)
-    secondary = usage_window(payload.get("seven_day"), "utilization", 10080)
-    if primary:
-        primary["label"] = "5h"
-    if secondary:
-        secondary["label"] = "Weekly"
-    if primary is None and secondary is None:
-        return None
-    return {"primary": primary, "secondary": secondary}
-
-
-def _usage_note_event(
-    agent: str,
-    note: str,
-    ) -> dict[str, Any]:
-    """
-    Build a usage-only event that surfaces why bars are unavailable.
-
-    Args:
-        agent (str): Provider name, one of claude, codex, or cursor.
-        note (str): Short status such as http_401 or missing_file.
-
-    Returns:
-        dict[str, Any]: A UsageUpdate carrying only the provider note.
-    """
-    return {
-        "session_id": "usage:" + agent,
-        "event": "UsageUpdate",
-        "agent": agent,
-        "note": str(note)[:40],
-    }
-
-
-def fetch_claude_usage(
-    env: Mapping[str, str],
-    opener: Callable[..., Any] | None = None,
-    now: float | None = None,
-    force: bool = False,
-    ) -> dict[str, Any] | None:
-    """
-    Ask Claude for allowance percents. The token is not included in the result.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping used to find the local sign-in and the cache.
-            PIDECK_FORCE_CLAUDE_USAGE=1 bypasses the throttle once (used on piDeck launch).
-        opener (Callable[..., Any] | None): Callable matching urllib.request.urlopen, for tests.
-        now (float | None): Current Unix time, or None to use the clock.
-        force (bool): When True, ask even if a successful sample was fetched recently.
-
-    Returns:
-        dict[str, Any] | None: A usage Claude event on success, a note-only event when the attempt
-            fails, or None when a recent successful sample still throttles the request.
-    """
-    now = time.time() if now is None else now
-    force = force or env.get("PIDECK_FORCE_CLAUDE_USAGE") == "1"
-    # fetched_at advances only after a usable sample; failures must not burn the interval.
-    if not force and now - fetched_at(env, "claude") < CLAUDE_USAGE_INTERVAL:
-        return None
-    token = read_claude_token(env)
-    if not token:
-        note = claude_sign_in_note(env)
-        note_fetch(env, "claude", note)
-        return _usage_note_event("claude", note)
-    request = urllib.request.Request(
-        "https://api.anthropic.com/api/oauth/usage",
-        headers={
-            "Authorization": "Bearer " + token,
-            "anthropic-beta": "oauth-2025-04-20",
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    try:
-        with (opener or safe_open)(request, timeout=5) as response:
-            body = json.loads(response.read().decode("utf-8", "ignore"))
-    except urllib.error.HTTPError as exc:
-        note = "http_" + str(exc.code)
-        note_fetch(env, "claude", note)
-        return _usage_note_event("claude", note)
-    except (OSError, ValueError) as exc:
-        note = "bad_json" if isinstance(exc, ValueError) else type(exc).__name__
-        note_fetch(env, "claude", note)
-        return _usage_note_event("claude", note)
-    usage = claude_usage_from_body(body)
-    if not usage:
-        note_fetch(env, "claude", "unrecognized")
-        return _usage_note_event("claude", "unrecognized")
-    event = {"session_id": "usage:claude", "event": "UsageUpdate", "agent": "claude", "usage": usage}
-    remember_usage(event, env)
-    stamp_fetch(env, "claude", now)
-    return event
-
-
-# --- Startup session discovery ---
-
-
-def _header_fields(
-    path: Path,
-    wanted: tuple[str, ...],
-    ) -> dict[str, str]:
-    """
-    Read a few named fields from the start of a session file, never the message body.
-
-    Args:
-        path (Path): JSONL session file.
-        wanted (tuple[str, ...]): Field names to copy when present on an object.
-
-    Returns:
-        dict[str, str]: The first values found for those names.
-    """
-    found = {}
-    try:
-        with open(path, "rb") as stream:
-            raw = stream.read(8192).decode("utf-8", "ignore")
-    except OSError:
-        return found
-    # Pull named strings out of the prefix. Parsing the whole line would also read
-    # Codex's base instructions, which are not a display field.
-    for key in wanted:
-        match = re.search(rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"', raw)
-        if not match:
-            continue
-        try:
-            value = json.loads('"' + match.group(1) + '"')
-        except ValueError:
-            continue
-        if isinstance(value, str) and value.strip():
-            found[key] = value.strip()
-    return found
-
-
-def _recent_files(
-    root: Path,
-    pattern: str,
-    now: float,
-    stale_seconds: float,
-    ) -> list[tuple[float, Path]]:
-    """
-    Newest files under root whose mtime is still inside the stale window.
-
-    Args:
-        root (Path): Directory to walk. Missing directories yield nothing.
-        pattern (str): Glob such as *.jsonl.
-        now (float): Current Unix time.
-        stale_seconds (float): Maximum age to treat as a live session.
-
-    Returns:
-        list[tuple[float, Path]]: Up to PRIME_LIMIT (mtime, path) pairs, newest first.
-    """
-    if not root.is_dir():
-        return []
-    found = []
-    for path in root.rglob(pattern):
-        try:
-            modified = path.stat().st_mtime
-        except OSError:
-            continue
-        if now - modified <= stale_seconds:
-            found.append((modified, path))
-    found.sort(reverse=True)
-    return found[:PRIME_LIMIT]
-
-
-def discover_sessions(
-    home: Path,
-    now: float,
-    stale_seconds: float,
-    ) -> list[dict[str, Any]]:
-    """
-    Tiles for sessions that were already open before piDeck started.
-
-    Args:
-        home (Path): Home directory containing .claude, .codex, and .cursor.
-        now (float): Current Unix time.
-        stale_seconds (float): Ignore files older than this (default 24h via PIDECK_PRIME_HOURS).
-
-    Returns:
-        list[dict[str, Any]]: Lifecycle events with a project or summary label, idle or working
-            state, and activity_at from file mtime. No transcript text.
-    """
-    events = []
-    title_keys = ("title", "summary", "customTitle", "display_name", "displayName")
-    for modified, path in _recent_files(home / ".claude" / "projects", "*.jsonl", now, stale_seconds):
-        if "subagents" in path.parts:
-            continue
-        fields = _header_fields(path, ("sessionId", "cwd") + title_keys)
-        session_id = fields.get("sessionId") or path.stem
-        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
-            continue
-        cwd = fields.get("cwd")
-        label = display_title(*(fields.get(key) for key in title_keys))
-        event = {
-            "session_id": session_id,
-            # working = touched within WORKING_AGE_SECONDS; otherwise idle inside the discover window.
-            "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
-            "agent": "claude",
-            "cwd": cwd,
-            "name": label or (Path(cwd).name if cwd else path.parent.name.split("-")[-1]),
-            "activity_at": modified,
-        }
-        pct = context_pct(str(path), claude_context_window(path))
-        if pct is not None:
-            event["context_pct"] = pct
-        events.append(event)
-    newest_codex = None
-    for modified, path in _recent_files(home / ".codex" / "sessions", "*.jsonl", now, stale_seconds):
-        fields = _header_fields(path, ("session_id", "cwd") + title_keys)
-        named = re.search(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", path.name)
-        session_id = fields.get("session_id") or (named.group(0) if named else None)
-        if not session_id:
-            continue
-        cwd = fields.get("cwd")
-        label = display_title(*(fields.get(key) for key in title_keys))
-        event = {
-            "session_id": session_id,
-            "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
-            "agent": "codex",
-            "cwd": cwd,
-            "name": label or (Path(cwd).name if cwd else "codex"),
-            "activity_at": modified,
-        }
-        if newest_codex is None:
-            newest_codex = path
-            event.update(codex_metrics({"transcript_path": str(path), "session_id": session_id}, {}))
-        events.append(event)
-    cursor_root = home / ".cursor" / "projects"
-    if cursor_root.is_dir():
-        cursor_files = []
-        for project in cursor_root.iterdir():
-            transcripts = project / "agent-transcripts"
-            if not transcripts.is_dir():
-                continue
-            for modified, path in _recent_files(transcripts, "*.jsonl", now, stale_seconds):
-                cursor_files.append((modified, path, project.name.split("-")[-1] or "cursor"))
-        cursor_files.sort(reverse=True)
-        for modified, path, name in cursor_files[:PRIME_LIMIT]:
-            session_id = path.parent.name
-            if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
-                continue
-            fields = _header_fields(path, title_keys)
-            label = display_title(*(fields.get(key) for key in title_keys))
-            events.append({
-                "session_id": "cursor:" + session_id,
-                "state": "working" if now - modified < WORKING_AGE_SECONDS else "idle",
-                "agent": "cursor",
-                "name": label or name,
-                "activity_at": modified,
-            })
-    return events
-
-
-def prime_events(
-    env: Mapping[str, str],
-    now: float | None = None,
-    opener: Callable[..., Any] | None = None,
-    ) -> list[dict[str, Any]]:
-    """
-    Usage samples and already-open sessions to publish when piDeck starts.
-
-    Args:
-        env (Mapping[str, str]): Environment mapping for home, cache, and the local sign-ins.
-        now (float | None): Current Unix time, or None to use the clock.
-        opener (Callable[..., Any] | None): Optional urlopen replacement for the Claude and Cursor
-            usage requests.
-
-    Returns:
-        list[dict[str, Any]]: Events safe to post: percentages, project names, and states. No
-            prompts.
-    """
-    now = time.time() if now is None else now
-    home = Path(env.get("PIDECK_HOME") or Path.home())
-    stale = float(env.get("PIDECK_PRIME_HOURS") or DEFAULT_PRIME_HOURS) * 3600
-    events = cached_usage_events(env)
-    events.extend(discover_sessions(home, now, stale))
-    claude = fetch_claude_usage(env, opener, now)
-    if claude:
-        events.append(claude)
-    cursor = fetch_cursor_usage(env, opener)
-    if cursor:
-        events.append(cursor)
-    return events
-
-
 # --- Event delivery and command-line entry point ---
 
 
@@ -1757,7 +861,7 @@ def post(
     env: Mapping[str, str],
     ) -> None:
     """
-    Cache permitted usage values and post one agent event to the configured display.
+    Queue sanitized metadata and deliver it with the current hook-only credential.
 
     Args:
         ev (dict[str, Any]): Agent event containing the session identifier and permitted update
@@ -1768,7 +872,6 @@ def post(
     Returns:
         None: No value is returned.
     """
-    remember_usage(ev, env)
     conf = load_settings(env)
     ev = dict(ev)
     if ev.get("cwd") and env.get("PIDECK_SEND_PATHS") != "1":
@@ -1776,6 +879,11 @@ def post(
         ev.setdefault("name", name[:64])
     if not wants_messages(env):
         ev.pop("message", None)
+    try:
+        from .event_store import remember
+    except ImportError:
+        from event_store import remember
+    ev = remember(ev, conf["url"], env)
     headers = {"Content-Type": "application/json"}
     if conf["token"]:
         headers["Authorization"] = "Bearer " + conf["token"]
@@ -1795,21 +903,23 @@ def main() -> int:
     source = "claude"
     cursor_response = {}
     try:
-        if "--prime" in sys.argv[1:]:
-            for ev in prime_events(os.environ):
-                try:
-                    post(ev, os.environ)
-                except Exception:
-                    pass
-            return 0
         if "--statusline" in sys.argv[1:]:
             run_statusline(sys.stdin.read(), os.environ)
+            return 0
+        if "--engine" in sys.argv[1:]:
+            payload = json.loads(sys.stdin.buffer.read())
+            allowed = {"session_id", "event", "context_pct", "usage"}
+            event = {key: value for key, value in payload.items() if key in allowed}
+            if event.get("event") == "UsageUpdate" and event.get("session_id"):
+                post({**event, "agent": "claude"}, os.environ)
             return 0
         source, notify = parse_args(sys.argv[1:])
         if notify is not None:
             ev = build_notify_event(json.loads(notify), os.environ)
         else:
             payload = json.loads(sys.stdin.buffer.read())
+            if payload.get("hook_event_name") in CURSOR_EVENTS:
+                source = "cursor"
             if source == "cursor":
                 cursor_response = cursor_hook_response(payload.get("hook_event_name"))
             ev = build_event(payload, os.environ, source)

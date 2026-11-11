@@ -14,3 +14,4 @@ __pycache__/
 /piDeck.lnk
 /pideck/assets/pideck.icns
 ui-settings.json
+agent-dismissals.json

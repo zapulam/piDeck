@@ -433,10 +433,10 @@ def test_notification_privacy_and_admin_token_separation(
         None: Explicit opt-in is required and the display token is not inherited.
     """
     env = {"PIDECK_CONFIG": str(tmp_path / "hook.json"), "PIDECK_SEND_MESSAGES": "0", "PIDECK_TOKEN": "admin"}
-    event = hook.build_event({"session_id": "s", "hook_event_name": "Notification", "message": "private"}, env)
+    event = hook.build_event({"session_id": "s", "hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "private"}, env)
     assert "message" not in event and hook.load_settings(env)["token"] == ""
     env["PIDECK_SEND_MESSAGES"] = "1"
-    assert hook.build_event({"session_id": "s", "hook_event_name": "Notification", "message": "private"}, env)["message"] == "private"
+    assert hook.build_event({"session_id": "s", "hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "private"}, env)["message"] == "private"
 
 
 @pytest.mark.parametrize("callback", ["http://127.0.0.1:8888/wrong?code=x&state=expected", "https://evil.example/?code=x&state=expected", "http://127.0.0.1:8888/callback?code=x&state=wrong", "http://127.0.0.1:8888/callback?code=x&state=expected&state=expected"])
